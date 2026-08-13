@@ -1,6 +1,6 @@
 services:
   greenmail:
-    image: greenmail/standalone:2.1.11
+    image: greenmail/standalone:2.1.12
     environment:
       GREENMAIL_OPTS: >-
         -Dgreenmail.setup.test.smtp
@@ -21,7 +21,7 @@ services:
       - mail-sentinel
 
   roundcube:
-    image: roundcube/roundcubemail:1.6.11-apache
+    image: roundcube/roundcubemail:1.7.3-apache
     depends_on:
       greenmail:
         condition: service_healthy
