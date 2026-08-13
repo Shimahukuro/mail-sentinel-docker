@@ -1,0 +1,49 @@
+services:
+  greenmail:
+    image: greenmail/standalone:2.1.11
+    environment:
+      GREENMAIL_OPTS: >-
+        -Dgreenmail.setup.test.smtp
+        -Dgreenmail.setup.test.imap
+        -Dgreenmail.hostname=0.0.0.0
+        -Dgreenmail.users=test:greenmail@test.local
+        -Dgreenmail.users.login=email
+    ports:
+      - "127.0.0.1:3025:3025"
+      - "127.0.0.1:3143:3143"
+    healthcheck:
+      test: ["CMD", "/usr/bin/bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/3143"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    networks:
+      - mail-sentinel
+
+  worker:
+    depends_on:
+      greenmail:
+        condition: service_healthy
+      spamassassin:
+        condition: service_healthy
+    environment:
+      IMAP_HOST: greenmail
+      IMAP_PORT: 3143
+      IMAP_TLS_MODE: none
+      IMAP_USERNAME: test@test.local
+      IMAP_PASSWORD_FILE: /run/secrets/imap_password
+      IMAP_INBOX: INBOX
+      IMAP_JUNK: Junk
+      POLL_INTERVAL_SECONDS: 5
+      BATCH_SIZE: 25
+      LOOKBACK_DAYS: 1
+      IMAP_TIMEOUT_SECONDS: 10
+      SPAMC_MAX_SIZE_BYTES: 10485760
+      PROCESSED_FLAG: MailSentinelChecked
+      CREATE_MISSING_FOLDERS: "true"
+    secrets:
+      - imap_password
+
+secrets:
+  imap_password:
+    file: ./tests/greenmail/imap_password

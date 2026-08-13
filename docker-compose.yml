@@ -34,9 +34,10 @@ services:
       spamassassin:
         condition: service_healthy
     environment:
-      IMAP_HOST: ${IMAP_HOST:?Set IMAP_HOST in .env}
+      IMAP_HOST: ${IMAP_HOST:-}
       IMAP_PORT: ${IMAP_PORT:-993}
-      IMAP_USERNAME: ${IMAP_USERNAME:?Set IMAP_USERNAME in .env}
+      IMAP_TLS_MODE: ${IMAP_TLS_MODE:-implicit}
+      IMAP_USERNAME: ${IMAP_USERNAME:-}
       IMAP_PASSWORD_FILE: /run/secrets/imap_password
       IMAP_INBOX: ${IMAP_INBOX:-INBOX}
       IMAP_JUNK: ${IMAP_JUNK:-Junk}
@@ -46,6 +47,7 @@ services:
       IMAP_TIMEOUT_SECONDS: ${IMAP_TIMEOUT_SECONDS:-30}
       SPAMC_MAX_SIZE_BYTES: ${SPAMC_MAX_SIZE_BYTES:-10485760}
       PROCESSED_FLAG: ${PROCESSED_FLAG:-MailSentinelChecked}
+      CREATE_MISSING_FOLDERS: ${CREATE_MISSING_FOLDERS:-false}
     secrets:
       - imap_password
     tmpfs:
