@@ -20,6 +20,31 @@ services:
     networks:
       - mail-sentinel
 
+  roundcube:
+    image: roundcube/roundcubemail:1.6.11-apache
+    depends_on:
+      greenmail:
+        condition: service_healthy
+    environment:
+      ROUNDCUBEMAIL_DEFAULT_HOST: greenmail
+      ROUNDCUBEMAIL_DEFAULT_PORT: 3143
+      ROUNDCUBEMAIL_SMTP_SERVER: greenmail
+      ROUNDCUBEMAIL_SMTP_PORT: 3025
+      ROUNDCUBEMAIL_DB_TYPE: sqlite
+      ROUNDCUBEMAIL_PLUGINS: archive,zipdownload
+    ports:
+      - "127.0.0.1:8081:80"
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks:
+      - mail-sentinel
+
   worker:
     depends_on:
       greenmail:

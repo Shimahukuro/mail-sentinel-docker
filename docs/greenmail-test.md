@@ -18,8 +18,22 @@ docker compose -f docker-compose.yml -f docker-compose.greenmail.yml up -d --bui
 | パスワード | `greenmail` |
 | ホストからのSMTP | `127.0.0.1:3025` |
 | ホストからのIMAP | `127.0.0.1:3143` |
+| Webメール | `http://127.0.0.1:8081` |
 
 この認証情報はローカルの隔離されたテスト環境専用であり、本物のアカウントには使用しない。
+
+## Roundcubeでメールを確認する
+
+ブラウザで[Roundcube](http://127.0.0.1:8081)を開き、次の情報でログインする。
+
+```text
+ユーザー名: test@test.local
+パスワード: greenmail
+```
+
+正常メールはINBOXに残り、GTUBEメールはworkerの処理後にJunkへ表示される。新着状態が反映されない場合は、Roundcubeの更新ボタンでフォルダ一覧を再読み込みする。
+
+Roundcubeはこのローカルテスト環境専用であり、HTTPポートは`127.0.0.1`だけに公開する。外部ネットワークや本番環境へ公開しない。
 
 ## テストメールの投入
 
@@ -47,7 +61,7 @@ docker compose -f docker-compose.yml -f docker-compose.greenmail.yml logs -f wor
 - GTUBEメールでは`spam moved`と表示され、Junkへ移動する。
 - メール本文とパスワードはログへ出力されない。
 
-ThunderbirdなどからIMAPへ接続すれば、INBOXとJunkの状態を目視できる。ローカルテストではCompose内部の閉じたネットワークを使うため平文IMAPを使用する。本番用の既定設定はIMAPSと証明書検証のまま変更されない。
+RoundcubeまたはThunderbirdなどからIMAPへ接続すれば、INBOXとJunkの状態を目視できる。ローカルテストではCompose内部の閉じたネットワークを使うため平文IMAPを使用する。本番用の既定設定はIMAPSと証明書検証のまま変更されない。
 
 ## 停止と初期化
 
