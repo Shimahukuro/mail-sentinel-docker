@@ -1,0 +1,70 @@
+name: mail-sentinel
+
+services:
+  spamassassin:
+    build:
+      context: ./spamassassin
+    restart: unless-stopped
+    expose:
+      - "783"
+    volumes:
+      - spamassassin-data:/var/lib/mail-sentinel
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+      - /run:size=1m,mode=0755
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "sa-check_spamd", "--hostname=127.0.0.1", "--port=783"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - mail-sentinel
+
+  worker:
+    build:
+      context: ./worker
+    restart: unless-stopped
+    depends_on:
+      spamassassin:
+        condition: service_healthy
+    environment:
+      IMAP_HOST: ${IMAP_HOST:?Set IMAP_HOST in .env}
+      IMAP_PORT: ${IMAP_PORT:-993}
+      IMAP_USERNAME: ${IMAP_USERNAME:?Set IMAP_USERNAME in .env}
+      IMAP_PASSWORD_FILE: /run/secrets/imap_password
+      IMAP_INBOX: ${IMAP_INBOX:-INBOX}
+      IMAP_JUNK: ${IMAP_JUNK:-Junk}
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-60}
+      BATCH_SIZE: ${BATCH_SIZE:-25}
+      LOOKBACK_DAYS: ${LOOKBACK_DAYS:-1}
+      IMAP_TIMEOUT_SECONDS: ${IMAP_TIMEOUT_SECONDS:-30}
+      SPAMC_MAX_SIZE_BYTES: ${SPAMC_MAX_SIZE_BYTES:-10485760}
+      PROCESSED_FLAG: ${PROCESSED_FLAG:-MailSentinelChecked}
+    secrets:
+      - imap_password
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - mail-sentinel
+
+secrets:
+  imap_password:
+    file: ${IMAP_PASSWORD_SECRET_FILE:-./secrets/imap_password}
+
+volumes:
+  spamassassin-data:
+
+networks:
+  mail-sentinel:
+    internal: false
