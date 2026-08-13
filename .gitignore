@@ -2,3 +2,4 @@
 .env
 secrets/*
 !secrets/.gitkeep
+tests/greenmail/messages/real-*.eml
