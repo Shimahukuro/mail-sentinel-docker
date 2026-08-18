@@ -9,6 +9,7 @@ services:
       - "783"
     volumes:
       - spamassassin-data:/var/lib/mail-sentinel
+      - spamassassin-rules:/var/lib/spamassassin
     tmpfs:
       - /tmp:size=32m,mode=1777
       - /run:size=1m,mode=0755
@@ -17,6 +18,11 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     healthcheck:
       test: ["CMD", "sa-check_spamd", "--hostname=127.0.0.1", "--port=783"]
       interval: 30s
@@ -48,6 +54,9 @@ services:
       SPAMC_MAX_SIZE_BYTES: ${SPAMC_MAX_SIZE_BYTES:-10485760}
       PROCESSED_FLAG: ${PROCESSED_FLAG:-MailSentinelChecked}
       CREATE_MISSING_FOLDERS: ${CREATE_MISSING_FOLDERS:-false}
+      DRY_RUN: ${DRY_RUN:-true}
+      RETRY_INITIAL_SECONDS: ${RETRY_INITIAL_SECONDS:-5}
+      RETRY_MAX_SECONDS: ${RETRY_MAX_SECONDS:-300}
     secrets:
       - imap_password
     tmpfs:
@@ -57,6 +66,11 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - mail-sentinel
 
@@ -66,6 +80,7 @@ secrets:
 
 volumes:
   spamassassin-data:
+  spamassassin-rules:
 
 networks:
   mail-sentinel:
