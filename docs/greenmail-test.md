@@ -10,6 +10,8 @@ GreenMailを使うと、実際のメールアカウントを操作せずにMail 
 docker compose -f docker-compose.yml -f docker-compose.greenmail.yml up -d --build
 ```
 
+GreenMail用設定では統合テストのため`DRY_RUN=false`を明示している。実メールサーバーへ接続する通常設定の既定値は`true`である。
+
 テスト用アカウントは次のとおり。
 
 | 項目 | 値 |
