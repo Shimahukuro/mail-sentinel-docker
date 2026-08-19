@@ -162,8 +162,8 @@ flowchart LR
 
 | フォルダ | ユーザーが入れるメール | 学習方法 | 学習成功後の移動先 |
 | --- | --- | --- | --- |
-| `Learn-Ham` | Junk に移動された正常メール | `sa-learn --ham` | INBOX |
-| `Learn-Spam` | INBOX に残った迷惑メール | `sa-learn --spam` | Junk |
+| `Learn-Ham` | Junk に移動された正常メール | `spamc -L ham`（`sa-learn --ham`相当） | INBOX |
+| `Learn-Spam` | INBOX に残った迷惑メール | `spamc -L spam`（`sa-learn --spam`相当） | Junk |
 
 ```mermaid
 flowchart LR
@@ -181,7 +181,7 @@ flowchart LR
 1. 対象メールの UID と内容を取得する。
 2. 学習済み記録を確認し、同じ指示の重複実行を防ぐ。
 3. SpamAssassin コンテナへメールと学習種別を渡す。
-4. SpamAssassin コンテナ内で `sa-learn --ham` または `sa-learn --spam` を実行する。
+4. `spamd`のTELLインターフェースを通じて、`sa-learn --ham`または`sa-learn --spam`相当の学習を実行する。
 5. 学習成功を確認してから、メールを INBOX または Junk へ移動する。
 6. UID、学習種別、処理日時、結果を監査ログと処理状態へ記録する。
 

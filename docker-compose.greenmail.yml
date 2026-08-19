@@ -45,10 +45,41 @@ services:
     networks:
       - mail-sentinel
 
+  greenmail-setup:
+    build:
+      context: ./worker
+    depends_on:
+      greenmail:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: ["imapfilter", "-c", "/tmp/greenmail-setup.lua"]
+    environment:
+      IMAP_HOST: greenmail
+      IMAP_PORT: 3143
+      IMAP_TLS_MODE: none
+      IMAP_USERNAME: test@test.local
+      IMAP_PASSWORD_FILE: /run/secrets/imap_password
+      IMAP_TIMEOUT_SECONDS: 10
+    secrets:
+      - imap_password
+    volumes:
+      - ./tests/greenmail/setup.lua:/tmp/greenmail-setup.lua:ro
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - mail-sentinel
+
   worker:
     depends_on:
       greenmail:
         condition: service_healthy
+      greenmail-setup:
+        condition: service_completed_successfully
       spamassassin:
         condition: service_healthy
     environment:
@@ -59,6 +90,11 @@ services:
       IMAP_PASSWORD_FILE: /run/secrets/imap_password
       IMAP_INBOX: INBOX
       IMAP_JUNK: Junk
+      LEARNING_ENABLED: "true"
+      IMAP_LEARN_HAM: Learn-Ham
+      IMAP_LEARN_SPAM: Learn-Spam
+      LEARNED_FLAG: MailSentinelLearned
+      LEARNING_BATCH_SIZE: 25
       POLL_INTERVAL_SECONDS: 5
       BATCH_SIZE: 25
       LOOKBACK_DAYS: 1

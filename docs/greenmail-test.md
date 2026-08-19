@@ -12,6 +12,8 @@ docker compose -f docker-compose.yml -f docker-compose.greenmail.yml up -d --bui
 
 GreenMail用設定では統合テストのため`DRY_RUN=false`を明示している。実メールサーバーへ接続する通常設定の既定値は`true`である。
 
+テスト専用の`greenmail-setup`サービスが、workerの起動前にGreenMail上へ`Junk`、`Learn-Ham`、`Learn-Spam`を作成する。本番用Composeは学習フォルダーを自動作成しない。
+
 テスト用アカウントは次のとおり。
 
 | 項目 | 値 |
@@ -59,11 +61,55 @@ curl --url smtp://127.0.0.1:3025 \
 docker compose -f docker-compose.yml -f docker-compose.greenmail.yml logs -f worker
 ```
 
-- 正常メールでは`ham checked`と表示され、INBOXに残る。
-- GTUBEメールでは`spam moved`と表示され、Junkへ移動する。
+- 正常メールでは`message_classified`の`classification`が`ham`となり、INBOXに残る。
+- GTUBEメールでは`message_classified`の`classification`が`spam`となり、Junkへ移動する。
 - メール本文とパスワードはログへ出力されない。
 
 RoundcubeまたはThunderbirdなどからIMAPへ接続すれば、INBOXとJunkの状態を目視できる。ローカルテストではCompose内部の閉じたネットワークを使うため平文IMAPを使用する。本番用の既定設定はIMAPSと証明書検証のまま変更されない。
+
+## フィードバック学習の統合テスト
+
+Roundcubeでフォルダー一覧を更新すると、`Learn-Ham`と`Learn-Spam`が表示される。
+
+1. 正常メールをJunkから`Learn-Ham`へ移動する。
+2. workerの次回監視後、メールがINBOXへ移動することを確認する。
+3. GTUBEメールをINBOXから`Learn-Spam`へ移動する。
+4. workerの次回監視後、メールがJunkへ移動することを確認する。
+5. workerログで`learning_succeeded`と`learning_move`を確認する。
+
+GTUBEが通常判定で既にJunkへ移動している場合は、RoundcubeでいったんINBOXへ戻してから`Learn-Spam`へ移動する。
+
+ログには学習種別、UID、成功・失敗、移動先と集計件数が記録される。本文、件名、送信者、パスワードは記録されない。
+
+### 失敗と再試行
+
+学習対象をフォルダーへ置いた直後にSpamAssassinを停止する。
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.greenmail.yml stop spamassassin
+```
+
+workerログに`learning_failed`と`"retry":true`が出て、対象メールが学習フォルダーに残ることを確認する。SpamAssassinを再開すると次回監視で学習される。
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.greenmail.yml start spamassassin
+```
+
+### 重複学習の防止
+
+学習後のメールを同じ学習フォルダーへもう一度移動する。`MailSentinelLearned`キーワードが保持されていれば、`learning_succeeded`を再出力せず、移動だけが行われる。
+
+### Bayesデータの永続化
+
+学習後にBayes件数を確認し、SpamAssassinコンテナを再作成してから再度確認する。
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.greenmail.yml exec spamassassin sa-learn --dump magic
+docker compose -f docker-compose.yml -f docker-compose.greenmail.yml up -d --force-recreate spamassassin
+docker compose -f docker-compose.yml -f docker-compose.greenmail.yml exec spamassassin sa-learn --dump magic
+```
+
+ham/spamの学習件数が再作成前後で維持されることを確認する。`spamassassin-data`名前付きボリュームはコンテナ再作成では削除されない。
 
 ## 停止と初期化
 

@@ -24,4 +24,4 @@ USER 10001:10001
 EXPOSE 783
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["spamd", "--listen=0.0.0.0", "--port=783", "--allowed-ips=0.0.0.0/0", "--username=mailsentinel", "--max-children=2", "--nouser-config", "--pidfile=/tmp/spamd.pid"]
+CMD ["spamd", "--listen=0.0.0.0", "--port=783", "--allowed-ips=0.0.0.0/0", "--allow-tell", "--username=mailsentinel", "--max-children=2", "--nouser-config", "--pidfile=/tmp/spamd.pid"]
