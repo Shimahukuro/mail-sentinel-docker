@@ -10,9 +10,10 @@
 - IMAPS（通常はTCP 993）を利用できる
 - IMAPサーバーがユーザー定義キーワードをサポートする
 - `INBOX`と移動先のJunkフォルダが既に存在する
+- 学習機能を使う場合は`Learn-Ham`と`Learn-Spam`フォルダが既に存在する
 - パスワード認証またはアプリパスワード認証を利用できる
 
-この段階ではOAuth 2.0、学習フォルダ、初期スキャン、複数アカウントには対応しない。
+この段階ではOAuth 2.0、初期スキャン、複数アカウントには対応しない。
 
 ## 設定
 
@@ -45,6 +46,7 @@ chmod 600 secrets/imap_password
 1. `.env`の`IMAP_JUNK`が実際の迷惑メールフォルダ名と一致する。
 2. IMAPユーザー定義キーワードを利用できる。
 3. 最初はテスト用メールボックスまたは少数のメールで試す。
+4. 学習機能を使う場合は、メールクライアントで`Learn-Ham`と`Learn-Spam`を事前に作成する。
 
 ## ビルドと起動
 
@@ -54,7 +56,7 @@ docker compose up -d
 docker compose logs -f worker
 ```
 
-workerは通常監視を始める前に、IMAP認証、INBOXとJunkの参照、INBOXの読み取り、SpamAssassinへの接続を診断する。診断に失敗した場合はメールを変更せず終了し、Composeの再起動設定に従って再試行する。診断だけを手動実行する場合は次を使用する。
+workerは通常監視を始める前に、IMAP認証、INBOXとJunkの参照、INBOXの読み取り、SpamAssassinへの接続を診断する。`LEARNING_ENABLED=true`では、2つの学習フォルダの存在と読み取りも確認する。診断に失敗した場合はメールを変更せず終了し、Composeの再起動設定に従って再試行する。診断だけを手動実行する場合は次を使用する。
 
 ```sh
 docker compose run --rm worker imapfilter -c /etc/mail-sentinel/diagnose.lua
@@ -63,6 +65,8 @@ docker compose run --rm worker imapfilter -c /etc/mail-sentinel/diagnose.lua
 ログは1行1イベントのJSON形式で出力する。本文、パスワード、完全なアカウント名は記録しない。`message_classified`ではUID、スコア、判定、実行または予定された操作を確認できる。
 
 正常メールには`MailSentinelChecked`キーワードが付く。スパムメールはJunkへ移動する。メール本文と認証情報は通常ログへ出力しない。
+
+学習機能を有効にした場合、誤検出された正常メールを`Learn-Ham`へ、検出漏れした迷惑メールを`Learn-Spam`へ移動する。学習成功後、前者はINBOX、後者はJunkへ移動する。学習に失敗したメールは学習フォルダに残り、次のポーリングで再試行される。
 
 既定では、PoC開始時に過去のメールを一括処理しないよう、当日から1日前までに届いたメールだけを対象とする。対象期間は`.env`の`LOOKBACK_DAYS`で変更できる。
 

@@ -76,6 +76,11 @@ IMAP_TLS_MODE=implicit
 IMAP_USERNAME=user@example.com
 IMAP_INBOX=INBOX
 IMAP_JUNK=Junk
+LEARNING_ENABLED=false
+IMAP_LEARN_HAM=Learn-Ham
+IMAP_LEARN_SPAM=Learn-Spam
+LEARNED_FLAG=MailSentinelLearned
+LEARNING_BATCH_SIZE=25
 
 POLL_INTERVAL_SECONDS=60
 BATCH_SIZE=25
@@ -102,6 +107,11 @@ IMAP_PASSWORD_SECRET_FILE=./secrets/imap_password
 | `IMAP_USERNAME` | IMAPログイン名 | 対象アカウント |
 | `IMAP_INBOX` | 監視フォルダー | `INBOX` |
 | `IMAP_JUNK` | 迷惑メール移動先 | 実際のフォルダー名 |
+| `LEARNING_ENABLED` | ユーザーフィードバック学習を有効にするか | 初回は`false` |
+| `IMAP_LEARN_HAM` | 正常メール学習用IMAPフォルダー | `Learn-Ham` |
+| `IMAP_LEARN_SPAM` | 迷惑メール学習用IMAPフォルダー | `Learn-Spam` |
+| `LEARNED_FLAG` | 学習成功済みを示すIMAPキーワード | `MailSentinelLearned` |
+| `LEARNING_BATCH_SIZE` | 種別ごとの1回の最大学習件数 | `25` |
 | `POLL_INTERVAL_SECONDS` | 確認間隔 | `60` |
 | `BATCH_SIZE` | 1回の最大処理件数 | `25` |
 | `LOOKBACK_DAYS` | 通常監視の対象日数 | `1` |
@@ -112,7 +122,31 @@ IMAP_PASSWORD_SECRET_FILE=./secrets/imap_password
 
 `IMAP_TLS_MODE=none`は、GreenMailなどローカルの隔離されたテスト環境だけで使用する。
 
-### 4.2 IMAPパスワード
+### 4.2 ユーザーフィードバック学習
+
+学習機能を利用する場合は、メールクライアントまたはプロバイダーのWebメールで`Learn-Ham`と`Learn-Spam`を事前に作成する。workerは実環境の学習フォルダーを自動作成しない。
+
+フォルダー作成後、次を設定して`DRY_RUN=true`のまま診断する。
+
+```dotenv
+LEARNING_ENABLED=true
+IMAP_LEARN_HAM=Learn-Ham
+IMAP_LEARN_SPAM=Learn-Spam
+LEARNED_FLAG=MailSentinelLearned
+LEARNING_BATCH_SIZE=25
+DRY_RUN=true
+```
+
+診断では学習フォルダーの存在と参照可否を確認する。IMAPにはフォルダー作成可否を変更なしで確定する標準操作がないため、存在しないフォルダーの作成可否はDry-Runでは確認できない。診断が成功した後に`DRY_RUN=false`へ変更する。
+
+- 正常なのにJunkへ移動されたメールは`Learn-Ham`へ移動する。
+- 迷惑メールなのにINBOXへ残ったメールは`Learn-Spam`へ移動する。
+- 学習成功後、hamはINBOX、spamはJunkへ移動する。
+- 学習失敗時は元の学習フォルダーへ残り、次回の監視で再試行する。
+
+学習済みメールには`LEARNED_FLAG`が付く。学習成功後に移動だけが失敗した場合、次回はBayes学習を繰り返さず移動だけを再試行する。hamには`PROCESSED_FLAG`も付くため、INBOXへ戻った直後に通常判定されない。
+
+### 4.3 IMAPパスワード
 
 パスワードは`.env`へ記載せず、Secretファイルへ保存する。
 
@@ -523,6 +557,8 @@ curl.exe --url smtp://127.0.0.1:3025 --mail-from sender@test.local --mail-rcpt t
 ```
 
 Roundcubeへ`test@test.local`と`greenmail`でログインし、正常メールがINBOX、GTUBEがJunkにあることを確認する。
+
+学習を確認する場合は、正常メールを`Learn-Ham`へ、GTUBEメールを`Learn-Spam`へ移動する。次回監視後、正常メールがINBOX、GTUBEメールがJunkへ移動し、workerログへ`learning_succeeded`が記録されることを確認する。失敗・再試行、重複防止、Bayes永続化の詳しい手順は[greenmail-test.md](greenmail-test.md)を参照する。
 
 GreenMail用設定は統合試験のため`DRY_RUN=false`を指定している。実メール用の通常設定とは異なる点に注意する。
 
