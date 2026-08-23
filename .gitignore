@@ -6,3 +6,5 @@ secrets/*
 config/*
 !config/.gitkeep
 tests/greenmail/messages/real-*.eml
+backups/*
+!backups/.gitkeep

@@ -328,6 +328,8 @@ docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml logs 
 {"event":"message_classified","uid":13,"classification":"ham","score":"0.2/5.0","action":"marked","dry_run":false}
 ```
 
+運用状態、通知、バックアップ、復元の詳細は[運用Runbook](operations-runbook.md)を参照する。
+
 ## 9. ログの見方
 
 workerは1行につき1つのJSONイベントを出力する。

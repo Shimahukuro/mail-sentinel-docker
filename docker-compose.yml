@@ -88,6 +88,33 @@ services:
     networks:
       - mail-sentinel
 
+  maintenance:
+    profiles: ["maintenance"]
+    build:
+      context: .
+      dockerfile: admin/Dockerfile
+    entrypoint: ["/usr/bin/tini", "--", "/usr/local/bin/mail-sentinel-maintenance"]
+    # Backup/restore must preserve files that can have restrictive ownership.
+    # This opt-in container receives only filesystem-maintenance capabilities.
+    user: "0:0"
+    volumes:
+      - spamassassin-data:/data/spamassassin-data
+      - spamassassin-rules:/data/spamassassin-rules
+      - mail-sentinel-state:/data/mail-sentinel-state
+      - ./backups:/backups
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - DAC_READ_SEARCH
+      - FOWNER
+    security_opt:
+      - no-new-privileges:true
+
 volumes:
   spamassassin-data:
   spamassassin-rules:

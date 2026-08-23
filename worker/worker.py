@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from mail_sentinel_imap import CapabilityIMAP, MailboxInfo
+from mail_sentinel_operations import Notifier, OperationsState
 
 
 STATE_SCHEMA = """
@@ -48,7 +49,10 @@ class WorkerState:
         root = Path(os.environ.get("STATE_DIR", "/var/lib/mail-sentinel-state"))
         root.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(root / "worker-state.sqlite3")
+        self.db.row_factory = sqlite3.Row
         self.db.executescript(STATE_SCHEMA)
+        self.operations = OperationsState(self.db)
+        self.notifier = Notifier(self.operations)
 
     def close(self) -> None:
         self.db.close()
@@ -84,6 +88,25 @@ class WorkerState:
             (folder, uidvalidity, uid, learn_type, status, utc_now()),
         )
         self.db.commit()
+
+    def failure(self, event_code: str, error: Exception) -> None:
+        self.operations.increment(f"{event_code}_count")
+        if self.operations.record_failure(event_code, type(error).__name__):
+            try:
+                self.notifier.send(event_code)
+            except Exception as notify_error:
+                self.operations.increment("notification_failed_count")
+                log("warn", "notification_failed", event_code=event_code,
+                    error_type=type(notify_error).__name__)
+
+    def success(self, event_code: str) -> None:
+        if self.operations.record_success(event_code):
+            try:
+                self.notifier.send(event_code, recovery=True)
+            except Exception as notify_error:
+                self.operations.increment("notification_failed_count")
+                log("warn", "notification_failed", event_code=event_code, recovery=True,
+                    error_type=type(notify_error).__name__)
 
 
 def utc_now() -> str:
@@ -277,6 +300,7 @@ def process_learning(connection: imaplib.IMAP4, client: CapabilityIMAP, state: W
             resumed += 1
         except Exception as error:
             failed += 1
+            state.failure("learning_move_failed", error)
             log("warn", "learning_move_failed", uid=uid, learning_type=learn_type, error=str(error))
         processed += 1
     remaining = limit - processed
@@ -285,6 +309,7 @@ def process_learning(connection: imaplib.IMAP4, client: CapabilityIMAP, state: W
         if method == "imap_keyword" else
         [uid for uid in all_uids if state.learning_status(source.name, generation, uid, learn_type) is None]
     )
+    state.operations.set_status(f"learning_{learn_type}_pending_count", len(pending_uids))
     for uid in pending_uids[:remaining]:
         try:
             raw = fetch_message(connection, uid)
@@ -299,10 +324,15 @@ def process_learning(connection: imaplib.IMAP4, client: CapabilityIMAP, state: W
                 if method == "local_database":
                     state.mark_learning(source.name, generation, uid, learn_type, "moved")
             learned += 1
+            if not dry_run:
+                state.operations.increment(f"learning_{learn_type}_success_count")
+                state.operations.set_status("last_learning_success", {"type": learn_type})
+                state.success("learning_failed")
             log("info", "learning_succeeded" if not dry_run else "learning_planned",
                 uid=uid, learning_type=learn_type, dry_run=dry_run)
         except Exception as error:
             failed += 1
+            state.failure("learning_failed", error)
             log("warn", "learning_failed", uid=uid, learning_type=learn_type, error=str(error), retry=True)
         processed += 1
     log("info", "learning_scan_complete", learning_type=learn_type, processed=processed,
@@ -310,9 +340,16 @@ def process_learning(connection: imaplib.IMAP4, client: CapabilityIMAP, state: W
 
 
 def scan_once() -> None:
-    connection, client = connect()
     state = WorkerState()
+    connection = None
     try:
+        try:
+            connection, client = connect()
+            state.operations.set_status("last_imap_success", True)
+            state.success("imap_connection_failed")
+        except Exception as error:
+            state.failure("imap_connection_failed", error)
+            raise
         inbox = client.resolve(required("IMAP_INBOX"))
         junk = client.resolve(required("IMAP_JUNK"), "\\junk")
         if boolean("LEARNING_ENABLED"):
@@ -330,35 +367,61 @@ def scan_once() -> None:
             candidates = search(connection, "SINCE", since)
             already_processed = state.processed(inbox.name, generation, candidates)
             candidates = [uid for uid in candidates if uid not in already_processed]
+        state.operations.set_status("pending_message_count", len(candidates))
+        backlog_threshold = int(os.environ.get("BACKLOG_MESSAGE_THRESHOLD", "100"))
+        if backlog_threshold < 1:
+            raise RuntimeError("BACKLOG_MESSAGE_THRESHOLD must be positive")
+        if len(candidates) >= backlog_threshold:
+            state.failure("processing_backlog", RuntimeError("pending message threshold exceeded"))
+        else:
+            state.success("processing_backlog")
         dry_run = boolean("DRY_RUN")
         counts = {"processed": 0, "spam": 0, "ham": 0, "failed": 0}
         for uid in candidates[:positive("BATCH_SIZE")]:
             try:
                 raw = fetch_message(connection, uid)
-                value, threshold = score(raw)
+                try:
+                    value, threshold = score(raw)
+                    state.operations.set_status("last_spamassassin_success", True)
+                    state.success("spamassassin_failed")
+                except Exception as error:
+                    state.failure("spamassassin_failed", error)
+                    raise
                 classification = "spam" if value >= threshold else "ham"
                 if not dry_run:
                     if classification == "spam":
-                        move(connection, client, uid, junk)
+                        try:
+                            move(connection, client, uid, junk)
+                            state.success("message_move_failed")
+                        except Exception as error:
+                            state.failure("message_move_failed", error)
+                            raise
                     elif method == "imap_keyword":
                         add_flags(connection, uid, [required("PROCESSED_FLAG")])
                     if method == "local_database":
                         state.mark_processed(inbox.name, generation, uid, classification)
                 counts[classification] += 1
+                state.operations.increment("messages_inspected_count")
+                state.operations.increment(f"messages_{classification}_count")
                 log("info", "message_classified", uid=uid, classification=classification,
                     score=value, threshold=threshold, action="would_process" if dry_run else "processed",
                     destination=junk.name if classification == "spam" else None, dry_run=dry_run)
             except Exception as error:
                 counts["failed"] += 1
+                state.operations.increment("message_failed_count")
                 log("warn", "message_deferred", uid=uid, error=str(error), retry=True)
             counts["processed"] += 1
         log("info", "scan_complete", **counts, dry_run=dry_run)
+        state.operations.set_status("last_scan_success", counts)
+        state.operations.set_status("consecutive_scan_failures", 0)
+        state.success("scan_failed")
     finally:
         state.close()
-        try:
-            connection.logout()
-        except imaplib.IMAP4.error:
-            pass
+        if connection is not None:
+            try:
+                connection.logout()
+            except imaplib.IMAP4.error:
+                pass
 
 
 def lock_paths() -> list[Path]:
@@ -435,6 +498,17 @@ def run() -> int:
     retry = positive("RETRY_INITIAL_SECONDS")
     retry_max = positive("RETRY_MAX_SECONDS")
     paths = lock_paths()
+    state = WorkerState()
+    try:
+        configuration = {
+            key: value for key, value in os.environ.items()
+            if key.startswith(("IMAP_", "POLL_", "BATCH_", "LEARNING_", "RETRY_", "NOTIFICATION_"))
+            and not any(secret_name in key for secret_name in ("PASSWORD", "TOKEN", "URL_FILE"))
+        }
+        fingerprint = hashlib.sha256(json.dumps(configuration, sort_keys=True).encode()).hexdigest()
+        state.operations.audit("worker_configuration_loaded", "success", fingerprint=fingerprint)
+    finally:
+        state.close()
     log("info", "worker_started", poll_interval_seconds=positive("POLL_INTERVAL_SECONDS"))
     while True:
         try:
@@ -446,6 +520,18 @@ def run() -> int:
             retry = positive("RETRY_INITIAL_SECONDS")
             time.sleep(positive("POLL_INTERVAL_SECONDS"))
         except Exception as error:
+            state = WorkerState()
+            try:
+                snapshot = state.operations.snapshot()
+                current = snapshot["status"].get("consecutive_scan_failures", {}).get("value", 0)
+                state.operations.set_status("consecutive_scan_failures", int(current) + 1)
+                state.operations.set_status("next_retry_at", (
+                    datetime.now(timezone.utc) + timedelta(seconds=retry)
+                ).isoformat().replace("+00:00", "Z"))
+                state.operations.increment("retry_count")
+                state.failure("scan_failed", error)
+            finally:
+                state.close()
             log("error", "scan_failed", error=str(error), retry_in_seconds=retry)
             time.sleep(retry)
             retry = min(retry * 2, retry_max)
