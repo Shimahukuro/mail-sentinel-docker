@@ -1,0 +1,30 @@
+version: 2
+
+updates:
+  # docker-compose.yml / docker-compose.greenmail.yml
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  # worker/Dockerfile
+  - package-ecosystem: docker
+    directory: /worker
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  # admin/Dockerfile
+  - package-ecosystem: docker
+    directory: /admin
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  # spamassassin/Dockerfile
+  - package-ecosystem: docker
+    directory: /spamassassin
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
