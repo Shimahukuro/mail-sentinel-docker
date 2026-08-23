@@ -1,0 +1,9 @@
+**
+!admin/
+!admin/**
+!python/
+!python/**
+!spamassassin/
+!spamassassin/local.cf
+!worker/
+!worker/**

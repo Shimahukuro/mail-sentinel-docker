@@ -261,7 +261,7 @@ docker compose logs worker
 診断だけを手動実行する場合は次を使用する。
 
 ```console
-docker compose run --rm worker imapfilter -c /etc/mail-sentinel/diagnose.lua
+docker compose run --rm worker /usr/local/bin/mail-sentinel-worker --diagnose
 ```
 
 この診断は既存メールの本文取得、移動、削除、フラグ変更を行わない。
@@ -476,7 +476,7 @@ docker compose logs --tail=100 worker spamassassin
 共通:
 
 ```console
-docker compose run --rm worker imapfilter -c /etc/mail-sentinel/diagnose.lua
+docker compose run --rm worker /usr/local/bin/mail-sentinel-worker --diagnose
 ```
 
 ### Junkフォルダーが存在しない
@@ -513,7 +513,89 @@ CREATE_MISSING_FOLDERS=true
 - `spamassassin-rules`ボリュームの状態を確認する。
 - GPG署名エラーの場合は更新を適用しない。
 
-## 14. GreenMailによるローカルテスト
+## 14. 既存メールの初期学習と初期スキャン
+
+初期処理は常駐workerから独立した`admin`管理ジョブとして、必ずプレビューと適用の2段階で実行する。日時にはタイムゾーンを含め、開始日時を含み終了日時を含まない範囲を指定する。
+
+### 14.1 初期学習
+
+確認済みspamをプレビューする例:
+
+```console
+docker compose --profile tools run --rm admin initial-learn preview --folder Junk --type spam --since-date 2026-01-01 --through-date 2026-07-31 --timezone Asia/Tokyo --max-messages 1000 --batch-size 50
+```
+
+結果に出力された`job_id`と`confirmation_token`を使って適用する。
+
+```console
+docker compose --profile tools run --rm admin initial-learn apply --job-id PREVIEW_JOB_ID --confirm CONFIRMATION_TOKEN
+```
+
+初期学習は元メールを移動、削除、フラグ変更しない。同じメッセージ内容と学習種別の成功記録があればスキップする。hamとspamの対象を目視確認し、片方だけに偏らないようにする。
+
+#### Bayes判定が有効になる最低学習件数
+
+SpamAssassinの既定値では、Bayes判定を有効にするために、確認済みhamと確認済みspamを**それぞれ200件以上**学習させる必要がある。これは`bayes_min_ham_num=200`と`bayes_min_spam_num=200`に相当し、片方だけが200件へ達してもBayes判定は有効にならない。両方の最低件数を満たすまでは、学習コマンドが成功してデータが保存されていても、`BAYES_00`～`BAYES_99`ルールは通常の採点へ参加しない。
+
+学習件数は次のコマンドで確認する。
+
+```console
+docker compose exec spamassassin sa-learn --dump magic
+```
+
+出力の`nham`がham学習数、`nspam`がspam学習数である。両方が200以上であることを確認してから、初期スキャンを再度プレビューし、`BAYES_*`ルールの発火、スコア分布、誤検出および検出漏れを確認する。
+
+200件はBayes分類器が採点へ参加するための既定の最低条件であり、判定精度を保証する件数ではない。誤った教師データは精度を低下させるため、確実に分類できるメールだけを学習させる。最低件数を設定で引き下げると少量データへ過度に適合する危険があるため、本番環境では原則として既定値を維持する。
+
+#### Yahoo!メールの迷惑メールを初期学習する場合
+
+Yahoo!メールでは、IMAP上の`Bulk Mail`がウェブメールの「迷惑メール」フォルダーに対応する。迷惑メールフォルダー内のメールをほかのフォルダーへ移動すると、Yahoo!メール側で「迷惑メールではない」という利用者フィードバックとして扱われる場合がある。そのため、初期spam学習の準備として`Bulk Mail`内のメールを`Learn-Spam`やINBOXへ移動してはならない。
+
+Yahoo!メールの初期spam学習では、`Bulk Mail`を直接、非破壊の学習元として指定する。
+
+```console
+docker compose --env-file env/yahoo.env --profile tools run --rm admin initial-learn preview --folder "Bulk Mail" --type spam --max-messages 500 --batch-size 25
+```
+
+previewで対象を確認してからapplyする。`initial-learn`管理ジョブはメール本文を学習に使用するだけで、元メールの移動、削除、フラグ変更を行わない。実行結果の`moved_count`が`0`であり、学習後も対象メールが`Bulk Mail`に残っていることを確認する。
+
+`Bulk Mail`から別フォルダーへ移動する操作は、そのメールが実際にはspamではなく、Yahoo!メール側の判定を訂正する場合だけ行う。Yahoo!メールの「迷惑メールではない」という報告と受信箱への移動については、[Yahoo!メール公式ヘルプ](https://support.yahoo-net.jp/PccMail/s/article/H000011502)も参照する。
+
+### 14.2 初期スキャン
+
+最初は短い期間と小さい移動上限でプレビューする。
+
+```console
+docker compose --profile tools run --rm admin initial-scan preview --folder INBOX --since-date 2026-07-01 --through-date 2026-07-31 --timezone Asia/Tokyo --max-messages 500 --max-moves 20 --batch-size 25 --threshold 5.0
+```
+
+`scan_candidate`として表示されるUID、受信日時、件名、送信者、スコア、命中ルールを確認してから適用する。
+
+```console
+docker compose --profile tools run --rm admin initial-scan apply --job-id PREVIEW_JOB_ID --confirm CONFIRMATION_TOKEN
+```
+
+プレビューはメールを変更しない。適用時にUIDVALIDITYまたはルールセットが変わっていた場合は処理を拒否するため、新しいプレビューを作成する。失敗したメッセージがあるジョブは`interrupted`となり、同じpreviewのapplyコマンドを再実行すると同じ適用ジョブを再開する。
+
+`--since-date`と`--through-date`は利用者のタイムゾーンにおける日付で、両端の日を含む。`--timezone`の既定値は`Asia/Tokyo`である。例えば`--since-date 2026-06-25 --through-date 2026-08-18`は、2026年6月25日00:00 JST以上、8月19日00:00 JST未満として処理される。IMAPの日単位検索では範囲を安全側へ前後1日広げ、取得した各メールの`INTERNALDATE`で厳密に絞り込む。
+
+時刻単位の指定が必要な場合だけ、`--since-datetime`と`--before-datetime`へUTCオフセットを含むISO 8601日時を指定する。
+
+ジョブ状態は次のコマンドで確認できる。
+
+```console
+docker compose --profile tools run --rm admin status --job-id JOB_ID
+```
+
+### 14.3 バックアップとロールバック上の注意
+
+ジョブ履歴は`mail-sentinel-state`、Bayesデータは`spamassassin-data`名前付きボリュームへ保存される。初期学習前には両方をバックアップする。Bayes学習は単純なファイル削除では安全に取り消せないため、誤学習時は対象を確認して反対種別で訂正するか、停止後にバックアップから復元する。
+
+初期スキャンはspamだけをJunkへ移動し、削除しない。元へ戻す場合はジョブ結果とJunkの内容を確認してメールクライアントから行う。Junkへ元から存在したメールを一括してINBOXへ戻してはいけない。
+
+通常workerと管理ジョブは同じアカウント・フォルダーの共有ロックを使う。管理ジョブの実行中は通常監視が待機する場合がある。
+
+## 15. GreenMailによるローカルテスト
 
 実メールボックスを操作せず確認する場合は、GreenMail用Compose設定を使用する。
 
@@ -570,9 +652,9 @@ GreenMail用設定は統合試験のため`DRY_RUN=false`を指定している�
 docker compose -f docker-compose.yml -f docker-compose.greenmail.yml down
 ```
 
-## 15. Windowsで利用する場合
+## 16. Windowsで利用する場合
 
-### 15.1 前提条件
+### 16.1 前提条件
 
 WindowsではDocker Desktop上のLinuxコンテナとして実行する。Windowsコンテナモードには対応していない。
 
@@ -594,13 +676,13 @@ docker info --format '{{.OSType}}'
 
 最後のコマンドが`linux`を表示することを確認する。`windows`の場合は、Docker DesktopのメニューからLinuxコンテナへ切り替える。
 
-### 15.2 リポジトリと改行コード
+### 16.2 リポジトリと改行コード
 
-workerのシェルスクリプトはLinuxコンテナ内で実行されるため、LF改行である必要がある。このリポジトリでは`.gitattributes`によって、シェルスクリプト、Lua、Dockerfile、ComposeファイルをLFへ固定している。
+workerのPythonファイルはLinuxコンテナ内で実行されるため、LF改行である必要がある。このリポジトリでは`.gitattributes`によって、Python、シェルスクリプト、Dockerfile、ComposeファイルをLFへ固定している。
 
 通常は追加設定不要だが、古い作業コピーを使用している場合は、変更を退避またはコミットしたうえで再度チェックアウトする。エディターで保存する場合も、対象ファイルをCRLFへ変換しない。
 
-### 15.3 Windows固有の補足
+### 16.3 Windows固有の補足
 
 初期設定、起動、診断、GreenMailテストは、それぞれ本文のWindows PowerShellまたは共通の手順を上から順に実行する。
 
@@ -608,7 +690,7 @@ workerのシェルスクリプトはLinuxコンテナ内で実行されるため
 - PowerShell環境によっては`curl`が別コマンドの別名になっているため、本文のSMTPテストでは`curl.exe`を使用する。
 - Secretファイルのアクセス権は、ファイルのプロパティにある「セキュリティ」から確認できる。
 
-### 15.4 Windows固有のトラブルシューティング
+### 16.4 Windows固有のトラブルシューティング
 
 #### `exec ... no such file or directory`または`^M`を含むエラー
 
@@ -637,7 +719,7 @@ Get-NetTCPConnection -State Listen |
   Where-Object LocalPort -In 3025, 3143, 8081
 ```
 
-## 16. 安全上の注意
+## 17. 安全上の注意
 
 - 実メールをテストfixtureとしてGitへコミットしない。
 - `.env`、パスワード、トークンをGitへ登録しない。

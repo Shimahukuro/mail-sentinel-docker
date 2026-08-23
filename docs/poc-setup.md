@@ -59,7 +59,7 @@ docker compose logs -f worker
 workerは通常監視を始める前に、IMAP認証、INBOXとJunkの参照、INBOXの読み取り、SpamAssassinへの接続を診断する。`LEARNING_ENABLED=true`では、2つの学習フォルダの存在と読み取りも確認する。診断に失敗した場合はメールを変更せず終了し、Composeの再起動設定に従って再試行する。診断だけを手動実行する場合は次を使用する。
 
 ```sh
-docker compose run --rm worker imapfilter -c /etc/mail-sentinel/diagnose.lua
+docker compose run --rm worker /usr/local/bin/mail-sentinel-worker --diagnose
 ```
 
 ログは1行1イベントのJSON形式で出力する。本文、パスワード、完全なアカウント名は記録しない。`message_classified`ではUID、スコア、判定、実行または予定された操作を確認できる。
@@ -67,6 +67,8 @@ docker compose run --rm worker imapfilter -c /etc/mail-sentinel/diagnose.lua
 正常メールには`MailSentinelChecked`キーワードが付く。スパムメールはJunkへ移動する。メール本文と認証情報は通常ログへ出力しない。
 
 学習機能を有効にした場合、誤検出された正常メールを`Learn-Ham`へ、検出漏れした迷惑メールを`Learn-Spam`へ移動する。学習成功後、前者はINBOX、後者はJunkへ移動する。学習に失敗したメールは学習フォルダに残り、次のポーリングで再試行される。
+
+SpamAssassinの既定では、Bayes判定を通常の採点へ参加させるために、確認済みhamと確認済みspamをそれぞれ200件以上学習させる必要がある。片方だけが200件へ達しても有効にならない。学習件数は`docker compose exec spamassassin sa-learn --dump magic`で確認する。200件は最低条件であり精度保証ではないため、確実に分類できるメールだけを使用する。詳細は[ユーザーガイド](user-guide.md#141-初期学習)を参照する。
 
 既定では、PoC開始時に過去のメールを一括処理しないよう、当日から1日前までに届いたメールだけを対象とする。対象期間は`.env`の`LOOKBACK_DAYS`で変更できる。
 

@@ -21,15 +21,6 @@ multiple licenses. The authoritative copyright and license information for an
 installed package is available inside the built image under
 `/usr/share/doc/<package>/copyright`.
 
-### IMAPFilter
-
-- Version supplied by Debian Bookworm at the time of review: 2.8.1
-- Source: https://github.com/lefcha/imapfilter
-- License: MIT/X11
-
-Copyright and license notices are provided by the upstream project and by the
-Debian package in `/usr/share/doc/imapfilter/copyright`.
-
 ### Apache SpamAssassin, spamd, and spamc
 
 - Version supplied by Debian Bookworm at the time of review: 4.0.1 series
