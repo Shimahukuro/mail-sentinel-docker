@@ -11,6 +11,7 @@ import imaplib
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import time
 from contextlib import ExitStack
@@ -18,6 +19,75 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from mail_sentinel_imap import CapabilityIMAP, MailboxInfo
+
+
+STATE_SCHEMA = """
+PRAGMA journal_mode=WAL;
+CREATE TABLE IF NOT EXISTS processed_messages (
+  folder TEXT NOT NULL,
+  uidvalidity INTEGER NOT NULL,
+  uid INTEGER NOT NULL,
+  classification TEXT NOT NULL,
+  processed_at TEXT NOT NULL,
+  PRIMARY KEY(folder, uidvalidity, uid)
+);
+CREATE TABLE IF NOT EXISTS learning_messages (
+  folder TEXT NOT NULL,
+  uidvalidity INTEGER NOT NULL,
+  uid INTEGER NOT NULL,
+  learn_type TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('learned','moved')),
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(folder, uidvalidity, uid, learn_type)
+);
+"""
+
+
+class WorkerState:
+    def __init__(self) -> None:
+        root = Path(os.environ.get("STATE_DIR", "/var/lib/mail-sentinel-state"))
+        root.mkdir(parents=True, exist_ok=True)
+        self.db = sqlite3.connect(root / "worker-state.sqlite3")
+        self.db.executescript(STATE_SCHEMA)
+
+    def close(self) -> None:
+        self.db.close()
+
+    def processed(self, folder: str, uidvalidity: int, uids: list[int]) -> set[int]:
+        if not uids:
+            return set()
+        placeholders = ",".join("?" for _ in uids)
+        rows = self.db.execute(
+            f"SELECT uid FROM processed_messages WHERE folder=? AND uidvalidity=? AND uid IN ({placeholders})",
+            (folder, uidvalidity, *uids),
+        )
+        return {int(row[0]) for row in rows}
+
+    def mark_processed(self, folder: str, uidvalidity: int, uid: int, classification: str) -> None:
+        self.db.execute(
+            "INSERT OR REPLACE INTO processed_messages VALUES (?,?,?,?,?)",
+            (folder, uidvalidity, uid, classification, utc_now()),
+        )
+        self.db.commit()
+
+    def learning_status(self, folder: str, uidvalidity: int, uid: int, learn_type: str) -> str | None:
+        row = self.db.execute(
+            "SELECT status FROM learning_messages WHERE folder=? AND uidvalidity=? AND uid=? AND learn_type=?",
+            (folder, uidvalidity, uid, learn_type),
+        ).fetchone()
+        return str(row[0]) if row else None
+
+    def mark_learning(self, folder: str, uidvalidity: int, uid: int,
+                      learn_type: str, status: str) -> None:
+        self.db.execute(
+            "INSERT OR REPLACE INTO learning_messages VALUES (?,?,?,?,?,?)",
+            (folder, uidvalidity, uid, learn_type, status, utc_now()),
+        )
+        self.db.commit()
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def required(name: str) -> str:
@@ -42,17 +112,32 @@ def positive(name: str) -> int:
 
 
 def log(level: str, event: str, **fields: object) -> None:
+    account_id = os.environ.get("MAIL_SENTINEL_ACCOUNT_ID")
     print(json.dumps({
-        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "level": level, "event": event, **fields,
+        "timestamp": utc_now(),
+        "level": level, "event": event,
+        **({"account_id": account_id} if account_id else {}), **fields,
     }, ensure_ascii=False, separators=(",", ":")), flush=True)
 
 
-def password() -> str:
-    value = Path(required("IMAP_PASSWORD_FILE")).read_text(encoding="utf-8").rstrip("\r\n")
+def secret(path_variable: str, description: str) -> str:
+    value = Path(required(path_variable)).read_text(encoding="utf-8").rstrip("\r\n")
     if not value:
-        raise RuntimeError("IMAP password secret is empty")
+        raise RuntimeError(f"{description} secret is empty")
     return value
+
+
+def authenticate(connection: imaplib.IMAP4) -> None:
+    method = os.environ.get("IMAP_AUTH_METHOD", "password")
+    username = required("IMAP_USERNAME")
+    if method in ("password", "app_password"):
+        connection.login(username, secret("IMAP_PASSWORD_FILE", "IMAP password"))
+        return
+    if method == "xoauth2":
+        token = secret("IMAP_OAUTH_ACCESS_TOKEN_FILE", "OAuth access token")
+        connection.authenticate("XOAUTH2", lambda _: f"user={username}\x01auth=Bearer {token}\x01\x01".encode())
+        return
+    raise RuntimeError("IMAP_AUTH_METHOD must be password, app_password, or xoauth2")
 
 
 def connect() -> tuple[imaplib.IMAP4, CapabilityIMAP]:
@@ -66,7 +151,7 @@ def connect() -> tuple[imaplib.IMAP4, CapabilityIMAP]:
             connection.starttls()
         elif mode != "none":
             raise RuntimeError("IMAP_TLS_MODE must be implicit, starttls, or none")
-    connection.login(required("IMAP_USERNAME"), password())
+    authenticate(connection)
     return connection, CapabilityIMAP(connection)
 
 
@@ -74,6 +159,30 @@ def select(connection: imaplib.IMAP4, mailbox: MailboxInfo, readonly: bool = Fal
     status, _ = connection.select(mailbox.wire_name, readonly=readonly)
     if status != "OK":
         raise RuntimeError(f"cannot select IMAP folder: {mailbox.name}")
+
+
+def uidvalidity(connection: imaplib.IMAP4) -> int:
+    response = connection.response("UIDVALIDITY")[1]
+    if not response or not response[0]:
+        raise RuntimeError("IMAP server did not report UIDVALIDITY")
+    return int(response[0])
+
+
+def supports_keywords(connection: imaplib.IMAP4) -> bool:
+    response = connection.response("PERMANENTFLAGS")[1]
+    if not response or not response[0]:
+        return False
+    return b"\\*" in response[0].strip().strip(b"()").split()
+
+
+def processed_method(connection: imaplib.IMAP4) -> str:
+    configured = required("PROCESSED_STATE")
+    if configured not in ("auto", "imap_keyword", "local_database"):
+        raise RuntimeError("PROCESSED_STATE must be auto, imap_keyword, or local_database")
+    available = supports_keywords(connection)
+    if configured == "imap_keyword" and not available:
+        raise RuntimeError("IMAP server does not support user-defined keywords")
+    return "imap_keyword" if configured == "imap_keyword" or (configured == "auto" and available) else "local_database"
 
 
 def search(connection: imaplib.IMAP4, *criteria: str) -> list[int]:
@@ -143,32 +252,52 @@ def resolve_or_create(connection: imaplib.IMAP4, client: CapabilityIMAP, name: s
         return client.resolve(name)
 
 
-def process_learning(connection: imaplib.IMAP4, client: CapabilityIMAP, source: MailboxInfo,
-                     destination: MailboxInfo, learn_type: str) -> None:
+def process_learning(connection: imaplib.IMAP4, client: CapabilityIMAP, state: WorkerState,
+                     source: MailboxInfo, destination: MailboxInfo, learn_type: str) -> None:
     select(connection, source)
+    generation = uidvalidity(connection)
+    method = processed_method(connection)
     learned_flag = required("LEARNED_FLAG")
     processed_flag = required("PROCESSED_FLAG")
     limit = positive("LEARNING_BATCH_SIZE")
     dry_run = boolean("DRY_RUN")
     processed = learned = resumed = failed = 0
-    for uid in search(connection, "KEYWORD", learned_flag)[:limit]:
+    all_uids = search(connection, "ALL")
+    resumed_uids = (
+        search(connection, "KEYWORD", learned_flag)
+        if method == "imap_keyword" else
+        [uid for uid in all_uids if state.learning_status(source.name, generation, uid, learn_type) == "learned"]
+    )
+    for uid in resumed_uids[:limit]:
         try:
             if not dry_run:
                 move(connection, client, uid, destination)
+                if method == "local_database":
+                    state.mark_learning(source.name, generation, uid, learn_type, "moved")
             resumed += 1
         except Exception as error:
             failed += 1
             log("warn", "learning_move_failed", uid=uid, learning_type=learn_type, error=str(error))
         processed += 1
     remaining = limit - processed
-    for uid in search(connection, "UNKEYWORD", learned_flag)[:remaining]:
+    pending_uids = (
+        search(connection, "UNKEYWORD", learned_flag)
+        if method == "imap_keyword" else
+        [uid for uid in all_uids if state.learning_status(source.name, generation, uid, learn_type) is None]
+    )
+    for uid in pending_uids[:remaining]:
         try:
             raw = fetch_message(connection, uid)
             if not dry_run:
                 learn(raw, learn_type)
-                flags = [learned_flag] + ([processed_flag] if learn_type == "ham" else [])
-                add_flags(connection, uid, flags)
+                if method == "imap_keyword":
+                    flags = [learned_flag] + ([processed_flag] if learn_type == "ham" else [])
+                    add_flags(connection, uid, flags)
+                else:
+                    state.mark_learning(source.name, generation, uid, learn_type, "learned")
                 move(connection, client, uid, destination)
+                if method == "local_database":
+                    state.mark_learning(source.name, generation, uid, learn_type, "moved")
             learned += 1
             log("info", "learning_succeeded" if not dry_run else "learning_planned",
                 uid=uid, learning_type=learn_type, dry_run=dry_run)
@@ -182,17 +311,25 @@ def process_learning(connection: imaplib.IMAP4, client: CapabilityIMAP, source: 
 
 def scan_once() -> None:
     connection, client = connect()
+    state = WorkerState()
     try:
         inbox = client.resolve(required("IMAP_INBOX"))
         junk = client.resolve(required("IMAP_JUNK"), "\\junk")
         if boolean("LEARNING_ENABLED"):
             ham_source = resolve_or_create(connection, client, required("IMAP_LEARN_HAM"))
             spam_source = resolve_or_create(connection, client, required("IMAP_LEARN_SPAM"))
-            process_learning(connection, client, ham_source, inbox, "ham")
-            process_learning(connection, client, spam_source, junk, "spam")
+            process_learning(connection, client, state, ham_source, inbox, "ham")
+            process_learning(connection, client, state, spam_source, junk, "spam")
         select(connection, inbox)
+        generation = uidvalidity(connection)
+        method = processed_method(connection)
         since = (datetime.now(timezone.utc) - timedelta(days=int(required("LOOKBACK_DAYS")) + 1)).strftime("%d-%b-%Y")
-        candidates = search(connection, "UNKEYWORD", required("PROCESSED_FLAG"), "SINCE", since)
+        if method == "imap_keyword":
+            candidates = search(connection, "UNKEYWORD", required("PROCESSED_FLAG"), "SINCE", since)
+        else:
+            candidates = search(connection, "SINCE", since)
+            already_processed = state.processed(inbox.name, generation, candidates)
+            candidates = [uid for uid in candidates if uid not in already_processed]
         dry_run = boolean("DRY_RUN")
         counts = {"processed": 0, "spam": 0, "ham": 0, "failed": 0}
         for uid in candidates[:positive("BATCH_SIZE")]:
@@ -203,8 +340,10 @@ def scan_once() -> None:
                 if not dry_run:
                     if classification == "spam":
                         move(connection, client, uid, junk)
-                    else:
+                    elif method == "imap_keyword":
                         add_flags(connection, uid, [required("PROCESSED_FLAG")])
+                    if method == "local_database":
+                        state.mark_processed(inbox.name, generation, uid, classification)
                 counts[classification] += 1
                 log("info", "message_classified", uid=uid, classification=classification,
                     score=value, threshold=threshold, action="would_process" if dry_run else "processed",
@@ -215,6 +354,7 @@ def scan_once() -> None:
             counts["processed"] += 1
         log("info", "scan_complete", **counts, dry_run=dry_run)
     finally:
+        state.close()
         try:
             connection.logout()
         except imaplib.IMAP4.error:
@@ -244,7 +384,18 @@ def diagnose() -> int:
         log("info", "startup_diagnostic", check="inbox_folder", folder=inbox.name, result="pass")
         log("info", "startup_diagnostic", check="junk_folder", folder=junk.name,
             source="special_use" if "\\junk" in junk.flags else "configured", result="pass")
-        select(connection, inbox, readonly=True)
+        # SELECT does not modify messages and is required here because some
+        # servers omit writable PERMANENTFLAGS from read-only EXAMINE replies.
+        select(connection, inbox)
+        method = processed_method(connection)
+        generation = uidvalidity(connection)
+        if method == "local_database":
+            state = WorkerState()
+            state.close()
+        log("info", "processed_state_selected", method=method,
+            reason="configured" if required("PROCESSED_STATE") != "auto" else
+            ("imap_keywords_available" if method == "imap_keyword" else "imap_keywords_unavailable"),
+            uidvalidity=generation)
         status, data = connection.status(inbox.wire_name, "(MESSAGES)")
         if status != "OK":
             raise RuntimeError("INBOX status request failed")

@@ -124,7 +124,7 @@ docker compose -f docker-compose.yml -f docker-compose.greenmail.yml stop worker
 正常メールとGTUBEメールをINBOXへ投入し、初期スキャンをプレビューする。
 
 ```sh
-docker compose -f docker-compose.yml -f docker-compose.greenmail.yml --profile tools run --rm admin initial-scan preview --folder INBOX --since-date 2020-01-01 --through-date 2029-12-31 --timezone Asia/Tokyo --max-messages 10 --max-moves 1 --batch-size 1 --threshold 5.0
+docker compose -f docker-compose.yml -f docker-compose.greenmail.yml --profile tools run --rm admin --account test initial-scan preview --folder INBOX --since-date 2020-01-01 --through-date 2029-12-31 --timezone Asia/Tokyo --max-messages 10 --max-moves 1 --batch-size 1 --threshold 5.0
 ```
 
 次を確認する。
@@ -137,13 +137,13 @@ docker compose -f docker-compose.yml -f docker-compose.greenmail.yml --profile t
 出力値を指定して適用し、GTUBEだけがJunkへ移動することを確認する。
 
 ```sh
-docker compose -f docker-compose.yml -f docker-compose.greenmail.yml --profile tools run --rm admin initial-scan apply --job-id PREVIEW_JOB_ID --confirm CONFIRMATION_TOKEN
+docker compose -f docker-compose.yml -f docker-compose.greenmail.yml --profile tools run --rm admin --account test initial-scan apply --job-id PREVIEW_JOB_ID --confirm CONFIRMATION_TOKEN
 ```
 
 初期学習は、確認済みメールを専用フォルダーへコピーしてから同様にpreview、applyの順で確認する。apply後も元メールが同じフォルダーに残ることと、同じ範囲の再実行で`skipped_count`が増え、Bayes件数が再度増加しないことを確認する。
 
 ```sh
-docker compose -f docker-compose.yml -f docker-compose.greenmail.yml --profile tools run --rm admin initial-learn preview --folder Learn-Ham --type ham --since-date 2020-01-01 --through-date 2029-12-31 --timezone Asia/Tokyo --max-messages 10 --batch-size 1
+docker compose -f docker-compose.yml -f docker-compose.greenmail.yml --profile tools run --rm admin --account test initial-learn preview --folder Learn-Ham --type ham --since-date 2020-01-01 --through-date 2029-12-31 --timezone Asia/Tokyo --max-messages 10 --batch-size 1
 ```
 
 中断・再開、UIDVALIDITY変更、確認トークン、件数上限、重複防止の状態遷移は次の自動テストでも検証する。

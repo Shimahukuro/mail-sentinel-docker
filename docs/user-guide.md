@@ -15,7 +15,7 @@ Mail Sentinel Dockerは、IMAPメールボックスの新着メールをSpamAssa
 - 停止、再起動、障害時の確認
 - GreenMailとRoundcubeを使ったローカルテスト
 
-メールの自動削除、複数アカウント、OAuth 2.0、学習フォルダー、管理画面にはまだ対応していない。
+メールの自動削除、OAuth 2.0のトークン自動更新、管理画面にはまだ対応していない。複数アカウント、学習フォルダー、事前取得したアクセストークンによるXOAUTH2認証には対応している。
 
 ## 2. 動作の概要
 
@@ -51,50 +51,40 @@ Mail Sentinelを停止しても、メールサーバーによる受信や通常�
 
 ## 4. 初期設定
 
-### 4.1 環境設定ファイル
+### 4.1 アカウント設定ファイル
 
 設定例をコピーする。
 
 macOS/Linux:
 
 ```sh
-cp .env.example .env
+mkdir -p config
+cp accounts.example.json config/accounts.json
+cp docker-compose.accounts.example.yml config/docker-compose.accounts.yml
 ```
 
 Windows PowerShell:
 
 ```powershell
-Copy-Item .env.example .env
+New-Item -ItemType Directory -Force -Path config | Out-Null
+Copy-Item accounts.example.json config/accounts.json
+Copy-Item docker-compose.accounts.example.yml config/docker-compose.accounts.yml
 ```
 
-`.env`を対象メールサーバーに合わせて編集する。
+`config/accounts.json`を対象メールサーバーに合わせて編集する。単一アカウントでも`accounts`配列へ1件を定義する。
 
-```dotenv
-IMAP_HOST=imap.example.com
-IMAP_PORT=993
-IMAP_TLS_MODE=implicit
-IMAP_USERNAME=user@example.com
-IMAP_INBOX=INBOX
-IMAP_JUNK=Junk
-LEARNING_ENABLED=false
-IMAP_LEARN_HAM=Learn-Ham
-IMAP_LEARN_SPAM=Learn-Spam
-LEARNED_FLAG=MailSentinelLearned
-LEARNING_BATCH_SIZE=25
-
-POLL_INTERVAL_SECONDS=60
-BATCH_SIZE=25
-LOOKBACK_DAYS=1
-IMAP_TIMEOUT_SECONDS=30
-SPAMC_MAX_SIZE_BYTES=10485760
-PROCESSED_FLAG=MailSentinelChecked
-CREATE_MISSING_FOLDERS=false
-
-DRY_RUN=true
-RETRY_INITIAL_SECONDS=5
-RETRY_MAX_SECONDS=300
-
-IMAP_PASSWORD_SECRET_FILE=./secrets/imap_password
+```json
+{
+  "accounts": [{
+    "name": "primary",
+    "environment": {
+      "IMAP_HOST": "imap.example.com",
+      "IMAP_USERNAME": "user@example.com",
+      "IMAP_PASSWORD_FILE": "/run/secrets/imap_primary_password",
+      "IMAP_JUNK": "Junk"
+    }
+  }]
+}
 ```
 
 主な設定項目は次のとおり。
@@ -117,10 +107,11 @@ IMAP_PASSWORD_SECRET_FILE=./secrets/imap_password
 | `LOOKBACK_DAYS` | 通常監視の対象日数 | `1` |
 | `CREATE_MISSING_FOLDERS` | Junkがない場合に作成するか | 実環境では`false` |
 | `DRY_RUN` | メールを変更せず判定だけ行うか | 初回は`true` |
+| `PROCESSED_STATE` | 処理済み状態の管理方式（`auto`、`imap_keyword`、`local_database`） | `auto` |
 | `RETRY_INITIAL_SECONDS` | 障害時の最初の再試行待機 | `5` |
 | `RETRY_MAX_SECONDS` | 再試行待機時間の上限 | `300` |
 
-`IMAP_TLS_MODE=none`は、GreenMailなどローカルの隔離されたテスト環境だけで使用する。
+共通値はトップレベルの`defaults`へ、アカウント固有値は各`environment`へ記述する。`IMAP_TLS_MODE=none`は、GreenMailなどローカルの隔離されたテスト環境だけで使用する。
 
 ### 4.2 ユーザーフィードバック学習
 
@@ -128,13 +119,13 @@ IMAP_PASSWORD_SECRET_FILE=./secrets/imap_password
 
 フォルダー作成後、次を設定して`DRY_RUN=true`のまま診断する。
 
-```dotenv
-LEARNING_ENABLED=true
-IMAP_LEARN_HAM=Learn-Ham
-IMAP_LEARN_SPAM=Learn-Spam
-LEARNED_FLAG=MailSentinelLearned
-LEARNING_BATCH_SIZE=25
-DRY_RUN=true
+```json
+"LEARNING_ENABLED": true,
+"IMAP_LEARN_HAM": "Learn-Ham",
+"IMAP_LEARN_SPAM": "Learn-Spam",
+"LEARNED_FLAG": "MailSentinelLearned",
+"LEARNING_BATCH_SIZE": 25,
+"DRY_RUN": true
 ```
 
 診断では学習フォルダーの存在と参照可否を確認する。IMAPにはフォルダー作成可否を変更なしで確定する標準操作がないため、存在しないフォルダーの作成可否はDry-Runでは確認できない。診断が成功した後に`DRY_RUN=false`へ変更する。
@@ -144,11 +135,11 @@ DRY_RUN=true
 - 学習成功後、hamはINBOX、spamはJunkへ移動する。
 - 学習失敗時は元の学習フォルダーへ残り、次回の監視で再試行する。
 
-学習済みメールには`LEARNED_FLAG`が付く。学習成功後に移動だけが失敗した場合、次回はBayes学習を繰り返さず移動だけを再試行する。hamには`PROCESSED_FLAG`も付くため、INBOXへ戻った直後に通常判定されない。
+IMAPキーワード方式では学習済みメールに`LEARNED_FLAG`が付く。ローカルDB方式では同じ状態をSQLiteへ保存する。どちらも学習成功後に移動だけが失敗した場合、次回はBayes学習を繰り返さず移動だけを再試行する。キーワード方式のhamには`PROCESSED_FLAG`も付くため、INBOXへ戻った直後に通常判定されない。ローカルDB方式で移動先UIDを取得できない場合は、安全側で通常判定を一度行うことがある。
 
 ### 4.3 IMAPパスワード
 
-パスワードは`.env`へ記載せず、Secretファイルへ保存する。
+パスワードは`accounts.json`へ記載せず、Secretファイルへ保存する。
 
 macOS/Linux:
 
@@ -157,9 +148,9 @@ mkdir -p secrets
 printf 'IMAP password: '
 read -r -s IMAP_PASSWORD
 printf '\n'
-printf '%s' "$IMAP_PASSWORD" > secrets/imap_password
+printf '%s' "$IMAP_PASSWORD" > secrets/imap_primary_password
 unset IMAP_PASSWORD
-chmod 600 secrets/imap_password
+chmod 600 secrets/imap_primary_password
 ```
 
 Windows PowerShell:
@@ -171,7 +162,7 @@ $passwordPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure
 
 try {
     $plainPassword = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($passwordPointer)
-    $secretPath = Join-Path $PWD 'secrets\imap_password'
+    $secretPath = Join-Path $PWD 'secrets\imap_primary_password'
     [IO.File]::WriteAllText($secretPath, $plainPassword, [Text.UTF8Encoding]::new($false))
 }
 finally {
@@ -180,7 +171,7 @@ finally {
 }
 ```
 
-`.env`と`secrets/imap_password`はGitの管理対象外である。Secretファイルを他のOSユーザーと共有しない。共用PCではファイルのアクセス権も制限する。
+`config/accounts.json`と`secrets/*`はGitの管理対象外である。Secretファイルを他のOSユーザーと共有しない。共用PCではファイルのアクセス権も制限する。
 
 ## 5. 初回起動
 
@@ -191,7 +182,7 @@ Compose設定を検証する。
 共通:
 
 ```console
-docker compose config --quiet
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml config --quiet
 ```
 
 何も表示されず終了すれば、Composeの構文は正常である。
@@ -201,15 +192,15 @@ docker compose config --quiet
 共通:
 
 ```console
-docker compose build
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml build
 ```
 
 ### 5.3 ドライランで起動
 
-最初は必ず`.env`を次の状態にする。
+最初は必ず`config/accounts.json`の`defaults`を次の状態にする。
 
-```dotenv
-DRY_RUN=true
+```json
+"DRY_RUN": true
 ```
 
 起動する。
@@ -217,13 +208,13 @@ DRY_RUN=true
 共通:
 
 ```console
-docker compose up -d
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml up -d
 ```
 
 状態を確認する。
 
 ```console
-docker compose ps
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml ps
 ```
 
 workerは通常監視を開始する前に、読み取り専用の起動前診断を自動実行する。診断に失敗した場合、メールの移動やキーワード付与は行わない。
@@ -245,7 +236,7 @@ Junkフォルダーが存在せず、`CREATE_MISSING_FOLDERS=true`の場合は`f
 共通:
 
 ```console
-docker compose logs worker
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml logs worker
 ```
 
 成功例:
@@ -261,7 +252,7 @@ docker compose logs worker
 診断だけを手動実行する場合は次を使用する。
 
 ```console
-docker compose run --rm worker /usr/local/bin/mail-sentinel-worker --diagnose
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml run --rm worker /usr/local/bin/mail-sentinel-supervisor --diagnose
 ```
 
 この診断は既存メールの本文取得、移動、削除、フラグ変更を行わない。
@@ -278,7 +269,7 @@ docker compose run --rm worker /usr/local/bin/mail-sentinel-worker --diagnose
 共通:
 
 ```console
-docker compose logs -f worker
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml logs -f worker
 ```
 
 迷惑メールのドライラン例:
@@ -305,10 +296,10 @@ docker compose logs -f worker
 4. `LOOKBACK_DAYS`と`BATCH_SIZE`が意図した範囲になっている。
 5. 最初はテスト用または少数のメールで確認している。
 
-`.env`を変更する。
+`config/accounts.json`を変更する。
 
-```dotenv
-DRY_RUN=false
+```json
+"DRY_RUN": false
 ```
 
 workerを再作成する。
@@ -316,13 +307,13 @@ workerを再作成する。
 共通:
 
 ```console
-docker compose up -d --force-recreate worker
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml up -d --force-recreate worker
 ```
 
 ログで`dry_run:false`を確認する。
 
 ```console
-docker compose logs --tail=50 worker
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml logs --tail=50 worker
 ```
 
 通常運転の迷惑メール例:
@@ -359,9 +350,9 @@ workerは1行につき1つのJSONイベントを出力する。
 共通:
 
 ```console
-docker compose logs --tail=100 worker
-docker compose logs -f worker spamassassin
-docker compose ps
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml logs --tail=100 worker
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml logs -f worker spamassassin
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml ps
 ```
 
 ログはコンテナごとに最大10MB、3ファイルまで保持する。長期的な監査記録が必要な場合は、別途ログ収集基盤を用意する。
@@ -387,7 +378,7 @@ docker compose ps
 共通:
 
 ```console
-docker compose run --rm spamassassin update-rules
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml run --rm spamassassin update-rules
 ```
 
 更新処理は次を行う。
@@ -414,8 +405,8 @@ SpamAssassin rule validation passed.
 成功後にSpamAssassinを再起動する。
 
 ```console
-docker compose restart spamassassin
-docker compose ps
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml restart spamassassin
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml ps
 ```
 
 更新または検証に失敗した場合は再起動せず、ネットワーク、DNS、時刻、ボリュームの書き込み権限を確認する。署名検証を無効化して回避しない。
@@ -427,7 +418,7 @@ docker compose ps
 以下のDocker Composeコマンドはすべて共通である。
 
 ```console
-docker compose down
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml down
 ```
 
 この操作ではSpamAssassinのBayesデータと更新ルールの名前付きボリュームは削除されない。
@@ -435,26 +426,26 @@ docker compose down
 ### 起動
 
 ```console
-docker compose up -d
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml up -d
 ```
 
 ### workerだけを再起動
 
 ```console
-docker compose restart worker
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml restart worker
 ```
 
-`.env`を変更した場合は、単純な再起動ではなく再作成する。
+`config/accounts.json`を変更した場合は、単純な再起動ではなく再作成する。
 
 ```console
-docker compose up -d --force-recreate worker
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml up -d --force-recreate worker
 ```
 
 ### 状態確認
 
 ```console
-docker compose ps
-docker compose logs --tail=100 worker spamassassin
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml ps
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml logs --tail=100 worker spamassassin
 ```
 
 ## 13. トラブルシューティング
@@ -476,17 +467,17 @@ docker compose logs --tail=100 worker spamassassin
 共通:
 
 ```console
-docker compose run --rm worker /usr/local/bin/mail-sentinel-worker --diagnose
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml run --rm worker /usr/local/bin/mail-sentinel-supervisor --diagnose
 ```
 
 ### Junkフォルダーが存在しない
 
-実環境ではメールクライアントまたはプロバイダーのWebメールからJunkフォルダーを作成し、`.env`の`IMAP_JUNK`を一致させることを推奨する。
+実環境ではメールクライアントまたはプロバイダーのWebメールからJunkフォルダーを作成し、`accounts.json`の`IMAP_JUNK`を一致させることを推奨する。
 
 自動作成する場合だけ次を指定する。
 
-```dotenv
-CREATE_MISSING_FOLDERS=true
+```json
+"CREATE_MISSING_FOLDERS": true
 ```
 
 ### メールが何度も判定される
@@ -522,13 +513,13 @@ CREATE_MISSING_FOLDERS=true
 確認済みspamをプレビューする例:
 
 ```console
-docker compose --profile tools run --rm admin initial-learn preview --folder Junk --type spam --since-date 2026-01-01 --through-date 2026-07-31 --timezone Asia/Tokyo --max-messages 1000 --batch-size 50
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml --profile tools run --rm admin --account primary initial-learn preview --folder Junk --type spam --since-date 2026-01-01 --through-date 2026-07-31 --timezone Asia/Tokyo --max-messages 1000 --batch-size 50
 ```
 
 結果に出力された`job_id`と`confirmation_token`を使って適用する。
 
 ```console
-docker compose --profile tools run --rm admin initial-learn apply --job-id PREVIEW_JOB_ID --confirm CONFIRMATION_TOKEN
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml --profile tools run --rm admin --account primary initial-learn apply --job-id PREVIEW_JOB_ID --confirm CONFIRMATION_TOKEN
 ```
 
 初期学習は元メールを移動、削除、フラグ変更しない。同じメッセージ内容と学習種別の成功記録があればスキップする。hamとspamの対象を目視確認し、片方だけに偏らないようにする。
@@ -540,7 +531,7 @@ SpamAssassinの既定値では、Bayes判定を有効にするために、確認
 学習件数は次のコマンドで確認する。
 
 ```console
-docker compose exec spamassassin sa-learn --dump magic
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml exec spamassassin sa-learn --dump magic
 ```
 
 出力の`nham`がham学習数、`nspam`がspam学習数である。両方が200以上であることを確認してから、初期スキャンを再度プレビューし、`BAYES_*`ルールの発火、スコア分布、誤検出および検出漏れを確認する。
@@ -554,7 +545,7 @@ Yahoo!メールでは、IMAP上の`Bulk Mail`がウェブメールの「迷惑�
 Yahoo!メールの初期spam学習では、`Bulk Mail`を直接、非破壊の学習元として指定する。
 
 ```console
-docker compose --env-file env/yahoo.env --profile tools run --rm admin initial-learn preview --folder "Bulk Mail" --type spam --max-messages 500 --batch-size 25
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml --profile tools run --rm admin --account yahoo initial-learn preview --folder "Bulk Mail" --type spam --max-messages 500 --batch-size 25
 ```
 
 previewで対象を確認してからapplyする。`initial-learn`管理ジョブはメール本文を学習に使用するだけで、元メールの移動、削除、フラグ変更を行わない。実行結果の`moved_count`が`0`であり、学習後も対象メールが`Bulk Mail`に残っていることを確認する。
@@ -566,13 +557,13 @@ previewで対象を確認してからapplyする。`initial-learn`管理ジョ�
 最初は短い期間と小さい移動上限でプレビューする。
 
 ```console
-docker compose --profile tools run --rm admin initial-scan preview --folder INBOX --since-date 2026-07-01 --through-date 2026-07-31 --timezone Asia/Tokyo --max-messages 500 --max-moves 20 --batch-size 25 --threshold 5.0
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml --profile tools run --rm admin --account primary initial-scan preview --folder INBOX --since-date 2026-07-01 --through-date 2026-07-31 --timezone Asia/Tokyo --max-messages 500 --max-moves 20 --batch-size 25 --threshold 5.0
 ```
 
 `scan_candidate`として表示されるUID、受信日時、件名、送信者、スコア、命中ルールを確認してから適用する。
 
 ```console
-docker compose --profile tools run --rm admin initial-scan apply --job-id PREVIEW_JOB_ID --confirm CONFIRMATION_TOKEN
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml --profile tools run --rm admin --account primary initial-scan apply --job-id PREVIEW_JOB_ID --confirm CONFIRMATION_TOKEN
 ```
 
 プレビューはメールを変更しない。適用時にUIDVALIDITYまたはルールセットが変わっていた場合は処理を拒否するため、新しいプレビューを作成する。失敗したメッセージがあるジョブは`interrupted`となり、同じpreviewのapplyコマンドを再実行すると同じ適用ジョブを再開する。
@@ -584,7 +575,7 @@ docker compose --profile tools run --rm admin initial-scan apply --job-id PREVIE
 ジョブ状態は次のコマンドで確認できる。
 
 ```console
-docker compose --profile tools run --rm admin status --job-id JOB_ID
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml --profile tools run --rm admin --account primary status --job-id JOB_ID
 ```
 
 ### 14.3 バックアップとロールバック上の注意
@@ -705,8 +696,8 @@ workerのPythonファイルはLinuxコンテナ内で実行されるため、LF�
 
 #### Secretファイルを読み取れない
 
-- `.env`の`IMAP_PASSWORD_SECRET_FILE`を確認する。
-- ファイル名が`imap_password.txt`になっていないか確認する。
+- `accounts.json`の`IMAP_PASSWORD_FILE`とCompose Secretの対応を確認する。
+- Secretファイル名へ意図せず`.txt`が付いていないか確認する。
 - エクスプローラーで拡張子を表示して確認する。
 - Docker Desktopにプロジェクトディレクトリへのアクセスが許可されているか確認する。
 
@@ -722,11 +713,37 @@ Get-NetTCPConnection -State Listen |
 ## 17. 安全上の注意
 
 - 実メールをテストfixtureとしてGitへコミットしない。
-- `.env`、パスワード、トークンをGitへ登録しない。
+- `config/accounts.json`、パスワード、トークンをGitへ登録しない。
 - 初回は必ずドライランを使用する。
 - 誤判定メールを自動削除しない。
 - GPG署名検証を無効化してルール更新を強行しない。
-- `docker compose down -v`は永続データを削除するため、通常運用では使用しない。
+- `docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml down -v`は永続データを削除するため、通常運用では使用しない。
 - 実メールに含まれるURLや添付ファイルを不用意に開かない。
 
 より詳しい設計と現在のPoC範囲は、[system-overview.md](system-overview.md)を参照する。GreenMail固有のテスト手順は、[greenmail-test.md](greenmail-test.md)を参照する。
+# 複数アカウント設定
+
+単一・複数アカウントのどちらも`accounts.json`で設定する。単一アカウントは`accounts`配列へ1件だけ定義する。
+
+1. `accounts.example.json`を`config/accounts.json`へ、`docker-compose.accounts.example.yml`を`config/docker-compose.accounts.yml`へコピーする。
+2. `accounts`にアカウントを追加する。`name`はログへ出力されないが、匿名識別子を安定させるため変更しない運用名にする。
+3. 各アカウントの接続先、ユーザー名、フォルダー、処理設定をそれぞれの`environment`に記述する。
+4. パスワードやトークンそのものはJSONに書かず、アカウントごとに別のCompose Secretとして雛形へ追加し、そのコンテナ内パスだけを`IMAP_PASSWORD_FILE`または`IMAP_OAUTH_ACCESS_TOKEN_FILE`に指定する。
+
+アカウントを増やす場合は、JSONのアカウント要素、workerとadminのSecret割り当て、トップレベルのSecret定義、ホスト側Secretファイルの4点を同じSecret名で追加する。
+
+スーパーバイザーはアカウントごとに独立したワーカープロセスを起動する。一方の接続診断や監視が失敗して終了しても、他方は停止せず、失敗したプロセスだけが再起動される。各ログには設定名を SHA-256 で変換した 12 桁の `account_id` が付く。状態とロックは `STATE_DIR/accounts/<account_id>` に分離される。
+
+`IMAP_AUTH_METHOD` はアカウントごとに次から選択できる。
+
+| 値 | Secret パスの設定 | 用途 |
+| --- | --- | --- |
+| `password` | `IMAP_PASSWORD_FILE` | 通常のパスワード |
+| `app_password` | `IMAP_PASSWORD_FILE` | プロバイダー発行のアプリパスワード |
+| `xoauth2` | `IMAP_OAUTH_ACCESS_TOKEN_FILE` | 事前取得した短寿命アクセストークンによる XOAUTH2 |
+
+現段階の `xoauth2` はアクセストークンを読み込んで IMAP 認証する境界までを提供する。更新トークンによる自動取得・更新と ISP 別エンドポイントプロファイルは未実装であり、期限前に外部の安全な仕組みで Secret を更新してワーカーを再起動する必要がある。Secret の内容は通常ログへ出力しない。
+
+`PROCESSED_STATE=auto`では、INBOX選択時の`PERMANENTFLAGS`からユーザー定義IMAPキーワードの可否を判定する。利用可能なら`imap_keyword`、利用できなければ`local_database`を選択する。ローカルDBは`STATE_DIR/accounts/<account_id>/worker-state.sqlite3`へ保存され、`UIDVALIDITY`、フォルダー、UIDの組で処理済み状態と学習再開状態を分離する。方式を固定する場合は`imap_keyword`または`local_database`を明示する。
+
+SpamAssassin の Bayes データは現在 `spamassassin-data` ボリュームを全アカウントで共有する。IMAP の処理状態は分離されるが、Bayes 学習データをアカウント単位に分離するモードは未実装である。異なる信頼境界の利用者を同じ構成へ収容しないこと。

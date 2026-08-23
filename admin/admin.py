@@ -22,6 +22,7 @@ from email.header import decode_header, make_header
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 
+from mail_sentinel_accounts import account_environment, configured_accounts
 from mail_sentinel_imap import CapabilityIMAP
 from typing import Iterator
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -553,6 +554,7 @@ def add_common(parser: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="mail-sentinel-admin")
+    parser.add_argument("--account", required=True, help="account name from accounts.json")
     commands = parser.add_subparsers(dest="command", required=True)
     for name, job_type in (("initial-learn", "initial_learn"), ("initial-scan", "initial_scan")):
         job_parser = commands.add_parser(name)
@@ -585,6 +587,14 @@ def validate_limits(args: argparse.Namespace) -> None:
 def main() -> int:
     args = build_parser().parse_args()
     validate_limits(args)
+    matches = [item for item in configured_accounts() if item[0] == args.account]
+    if not matches:
+        emit("admin_failed", error="configured account was not found")
+        return 1
+    _name, identifier, configured = matches[0]
+    environment = account_environment(identifier, configured)
+    os.environ.clear()
+    os.environ.update(environment)
     state_dir = Path(os.environ.get("STATE_DIR", "/var/lib/mail-sentinel-state"))
     state = State(state_dir / "state.sqlite3")
     try:

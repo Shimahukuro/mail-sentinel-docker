@@ -8,22 +8,24 @@
 
 - Docker EngineとDocker Composeが利用できる
 - IMAPS（通常はTCP 993）を利用できる
-- IMAPサーバーがユーザー定義キーワードをサポートする
+- IMAPサーバーがUIDVALIDITYを通知する
 - `INBOX`と移動先のJunkフォルダが既に存在する
 - 学習機能を使う場合は`Learn-Ham`と`Learn-Spam`フォルダが既に存在する
 - パスワード認証またはアプリパスワード認証を利用できる
 
-この段階ではOAuth 2.0、初期スキャン、複数アカウントには対応しない。
+単一・複数アカウントを同じJSON形式で設定する。事前取得したアクセストークンによるXOAUTH2認証と初期スキャンは利用できるが、OAuthトークンの自動更新は未実装である。
 
 ## 設定
 
-環境設定のひな型をコピーする。
+アカウント設定とCompose Secret定義のひな型をコピーする。
 
 ```sh
-cp .env.example .env
+mkdir -p config
+cp accounts.example.json config/accounts.json
+cp docker-compose.accounts.example.yml config/docker-compose.accounts.yml
 ```
 
-`.env`のIMAPホスト、ユーザー名、フォルダ名などを環境に合わせて変更する。
+`config/accounts.json`のIMAPホスト、ユーザー名、フォルダ名などを環境に合わせて変更する。単一アカウントは`accounts`配列へ1件だけ定義する。
 
 初回接続では`DRY_RUN=true`のまま起動する。このモードでは判定とログ出力だけを行い、メールの移動やIMAPキーワードの付与は行わない。ログを確認してから`DRY_RUN=false`へ変更する。
 
@@ -31,11 +33,11 @@ cp .env.example .env
 
 ```sh
 mkdir -p secrets
-printf '%s' 'your-app-password' > secrets/imap_password
-chmod 600 secrets/imap_password
+printf '%s' 'your-app-password' > secrets/imap_primary_password
+chmod 600 secrets/imap_primary_password
 ```
 
-`.env`と`secrets/imap_password`はGitの管理対象外である。
+`config/accounts.json`、`config/docker-compose.accounts.yml`、`secrets/imap_primary_password`はGitの管理対象外である。
 
 ## 起動前の安全確認
 
@@ -43,7 +45,7 @@ chmod 600 secrets/imap_password
 
 また、メールプロバイダー上で次を確認する。
 
-1. `.env`の`IMAP_JUNK`が実際の迷惑メールフォルダ名と一致する。
+1. `accounts.json`の`IMAP_JUNK`が実際の迷惑メールフォルダ名と一致する。
 2. IMAPユーザー定義キーワードを利用できる。
 3. 最初はテスト用メールボックスまたは少数のメールで試す。
 4. 学習機能を使う場合は、メールクライアントで`Learn-Ham`と`Learn-Spam`を事前に作成する。
@@ -51,15 +53,15 @@ chmod 600 secrets/imap_password
 ## ビルドと起動
 
 ```sh
-docker compose build
-docker compose up -d
-docker compose logs -f worker
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml build
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml up -d
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml logs -f worker
 ```
 
 workerは通常監視を始める前に、IMAP認証、INBOXとJunkの参照、INBOXの読み取り、SpamAssassinへの接続を診断する。`LEARNING_ENABLED=true`では、2つの学習フォルダの存在と読み取りも確認する。診断に失敗した場合はメールを変更せず終了し、Composeの再起動設定に従って再試行する。診断だけを手動実行する場合は次を使用する。
 
 ```sh
-docker compose run --rm worker /usr/local/bin/mail-sentinel-worker --diagnose
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml run --rm worker /usr/local/bin/mail-sentinel-supervisor --diagnose
 ```
 
 ログは1行1イベントのJSON形式で出力する。本文、パスワード、完全なアカウント名は記録しない。`message_classified`ではUID、スコア、判定、実行または予定された操作を確認できる。
@@ -68,14 +70,14 @@ docker compose run --rm worker /usr/local/bin/mail-sentinel-worker --diagnose
 
 学習機能を有効にした場合、誤検出された正常メールを`Learn-Ham`へ、検出漏れした迷惑メールを`Learn-Spam`へ移動する。学習成功後、前者はINBOX、後者はJunkへ移動する。学習に失敗したメールは学習フォルダに残り、次のポーリングで再試行される。
 
-SpamAssassinの既定では、Bayes判定を通常の採点へ参加させるために、確認済みhamと確認済みspamをそれぞれ200件以上学習させる必要がある。片方だけが200件へ達しても有効にならない。学習件数は`docker compose exec spamassassin sa-learn --dump magic`で確認する。200件は最低条件であり精度保証ではないため、確実に分類できるメールだけを使用する。詳細は[ユーザーガイド](user-guide.md#141-初期学習)を参照する。
+SpamAssassinの既定では、Bayes判定を通常の採点へ参加させるために、確認済みhamと確認済みspamをそれぞれ200件以上学習させる必要がある。片方だけが200件へ達しても有効にならない。学習件数は`docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml exec spamassassin sa-learn --dump magic`で確認する。200件は最低条件であり精度保証ではないため、確実に分類できるメールだけを使用する。詳細は[ユーザーガイド](user-guide.md#141-初期学習)を参照する。
 
-既定では、PoC開始時に過去のメールを一括処理しないよう、当日から1日前までに届いたメールだけを対象とする。対象期間は`.env`の`LOOKBACK_DAYS`で変更できる。
+既定では、PoC開始時に過去のメールを一括処理しないよう、当日から1日前までに届いたメールだけを対象とする。対象期間は`accounts.json`の`LOOKBACK_DAYS`で変更できる。
 
 停止する場合は次を実行する。
 
 ```sh
-docker compose down
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml down
 ```
 
 Bayesデータは名前付きボリュームに残る。データも削除したい場合だけ、影響を確認したうえでボリュームを明示的に削除する。
@@ -85,15 +87,15 @@ Bayesデータは名前付きボリュームに残る。データも削除した
 ルール更新は自動実行せず、管理者が次のコマンドで明示的に実行する。
 
 ```sh
-docker compose run --rm spamassassin update-rules
-docker compose restart spamassassin
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml run --rm spamassassin update-rules
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml restart spamassassin
 ```
 
 更新コマンドは`sa-update`実行後に`spamassassin --lint`を行う。更新または検証に失敗した場合は異常終了し、稼働中のSpamAssassinは再起動しない。更新済みルールは`spamassassin-rules`ボリュームへ保存される。
 
 ## 現段階の制約
 
-- IMAPキーワード非対応のサーバーでは正常メールの処理済み管理ができない。
+- IMAPキーワード非対応のサーバーでは、アカウント別ローカルSQLiteへ処理済み状態を保存する。
 - `LOOKBACK_DAYS`より前に届いた未処理メールは通常監視の対象外になる。
 - SpamAssassinとの通信に失敗したメールは移動せず、次回以降に再試行する。
 - `spamc`の最大サイズを超えるメールは安全側で処理を保留する。
