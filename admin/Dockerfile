@@ -14,6 +14,7 @@ RUN apt-get update \
 
 COPY --chown=root:root admin/admin.py /usr/local/bin/mail-sentinel-admin
 COPY --chown=root:root python/mail_sentinel_imap.py /usr/lib/python3/dist-packages/mail_sentinel_imap.py
+COPY --chown=root:root python/mail_sentinel_accounts.py /usr/lib/python3/dist-packages/mail_sentinel_accounts.py
 COPY --chown=root:root spamassassin/local.cf /etc/mail-sentinel/local.cf
 RUN chmod 0755 /usr/local/bin/mail-sentinel-admin
 

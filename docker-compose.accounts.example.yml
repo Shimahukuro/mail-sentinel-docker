@@ -1,0 +1,12 @@
+services:
+  worker:
+    secrets:
+      - imap_primary_password
+
+  admin:
+    secrets:
+      - imap_primary_password
+
+secrets:
+  imap_primary_password:
+    file: ./secrets/imap_primary_password
