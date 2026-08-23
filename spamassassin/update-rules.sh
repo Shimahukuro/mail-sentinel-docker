@@ -23,4 +23,7 @@ case "$update_status" in
 esac
 
 spamassassin --lint
+date -u +%Y-%m-%dT%H:%M:%SZ > /var/lib/spamassassin/mail-sentinel-rules-updated-at
 echo 'SpamAssassin rule validation passed.'
+printf '{"event":"rule_update","result":"success","timestamp":"%s"}\n' \
+    "$(cat /var/lib/spamassassin/mail-sentinel-rules-updated-at)"

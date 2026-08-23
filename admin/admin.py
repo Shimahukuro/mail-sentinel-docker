@@ -24,6 +24,7 @@ from pathlib import Path
 
 from mail_sentinel_accounts import account_environment, configured_accounts
 from mail_sentinel_imap import CapabilityIMAP
+from mail_sentinel_operations import Notifier, open_operations
 from typing import Iterator
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -536,7 +537,63 @@ def apply_job(args: argparse.Namespace, state: State) -> None:
 
 
 def status_command(args: argparse.Namespace, state: State) -> None:
-    print(json.dumps(dict(state.job(args.job_id)), ensure_ascii=False, indent=2))
+    if args.job_id:
+        print(json.dumps(dict(state.job(args.job_id)), ensure_ascii=False, indent=2))
+        return
+    snapshot = args.operations.snapshot()
+    marker = Path("/var/lib/spamassassin/mail-sentinel-rules-updated-at")
+    snapshot["spamassassin_rules_updated_at"] = (
+        marker.read_text(encoding="utf-8").strip() if marker.exists() else None
+    )
+    print(json.dumps(snapshot, ensure_ascii=False, indent=2))
+
+
+def health_command(args: argparse.Namespace, _state: State) -> None:
+    snapshot = args.operations.snapshot()
+    result = {"health": snapshot["health"], "account_id": os.environ.get("MAIL_SENTINEL_ACCOUNT_ID")}
+    if args.live:
+        mailbox = None
+        try:
+            mailbox = Mailbox()
+            spam = SpamAssassin()
+            spam.score(b"From: health@example.invalid\r\n\r\nHealth check.\r\n")
+            result["live"] = {"imap": "pass", "spamassassin": "pass"}
+        except Exception as error:
+            result["health"] = "unhealthy"
+            result["live"] = {"result": "fail", "error_type": type(error).__name__}
+        finally:
+            if mailbox is not None:
+                mailbox.close()
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+def incidents_command(args: argparse.Namespace, _state: State) -> None:
+    rows = args.operations.db.execute(
+        "SELECT * FROM active_incidents " + ("" if args.all else "WHERE status IN ('pending','open') ") +
+        "ORDER BY first_seen_at DESC"
+    )
+    print(json.dumps([dict(row) for row in rows], ensure_ascii=False, indent=2))
+
+
+def audit_command(args: argparse.Namespace, _state: State) -> None:
+    query = "SELECT * FROM audit_events"
+    values = ()
+    if args.since:
+        query += " WHERE occurred_at>=?"
+        values = (parse_datetime(args.since).isoformat().replace("+00:00", "Z"),)
+    query += " ORDER BY occurred_at DESC LIMIT ?"
+    rows = args.operations.db.execute(query, (*values, args.limit))
+    result = []
+    for row in rows:
+        item = dict(row)
+        item["details"] = json.loads(item["details"])
+        result.append(item)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+def notification_test_command(args: argparse.Namespace, _state: State) -> None:
+    sent = Notifier(args.operations).send("notification_test")
+    print(json.dumps({"event": "notification_test", "sent": sent}, separators=(",", ":")))
 
 
 def add_common(parser: argparse.ArgumentParser) -> None:
@@ -572,8 +629,20 @@ def build_parser() -> argparse.ArgumentParser:
         apply_parser.add_argument("--confirm", required=True)
         apply_parser.set_defaults(handler=apply_job)
     status_parser = commands.add_parser("status")
-    status_parser.add_argument("--job-id", required=True)
+    status_parser.add_argument("--job-id", help="show one initial job instead of operational status")
     status_parser.set_defaults(handler=status_command)
+    health_parser = commands.add_parser("health")
+    health_parser.add_argument("--live", action="store_true", help="also test IMAP and SpamAssassin")
+    health_parser.set_defaults(handler=health_command)
+    incidents_parser = commands.add_parser("incidents")
+    incidents_parser.add_argument("--all", action="store_true")
+    incidents_parser.set_defaults(handler=incidents_command)
+    audit_parser = commands.add_parser("audit")
+    audit_parser.add_argument("--since", help="inclusive ISO 8601 date-time with UTC offset")
+    audit_parser.add_argument("--limit", type=int, default=100)
+    audit_parser.set_defaults(handler=audit_command)
+    notification_parser = commands.add_parser("notification-test")
+    notification_parser.set_defaults(handler=notification_test_command)
     return parser
 
 
@@ -597,13 +666,19 @@ def main() -> int:
     os.environ.update(environment)
     state_dir = Path(os.environ.get("STATE_DIR", "/var/lib/mail-sentinel-state"))
     state = State(state_dir / "state.sqlite3")
+    operations_db, operations = open_operations(state_dir)
+    args.operations = operations
     try:
         args.handler(args, state)
+        operations.audit("admin_command", "success", command=args.command)
         return 0
     except Exception as error:
+        operations.audit("admin_command", "failure", command=args.command,
+                         error_type=type(error).__name__)
         emit("admin_failed", error=str(error))
         return 1
     finally:
+        operations_db.close()
         state.close()
 
 
