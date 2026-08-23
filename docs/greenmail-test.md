@@ -111,6 +111,53 @@ docker compose -f docker-compose.yml -f docker-compose.greenmail.yml exec spamas
 
 ham/spamの学習件数が再作成前後で維持されることを確認する。`spamassassin-data`名前付きボリュームはコンテナ再作成では削除されない。
 
+`sa-learn --dump magic`の`nham`はham学習数、`nspam`はspam学習数を示す。SpamAssassinの既定では、`nham`と`nspam`が**それぞれ200以上**になるまでBayes判定は通常の採点へ参加しない。GreenMailの1件ずつのfixtureは学習処理、重複防止、永続化を確認するためのものであり、`BAYES_*`ルールの発火確認には不足する。200件は分類器を有効にする最低条件であり、精度保証ではない。
+
+## 初期学習・初期スキャン管理ジョブ
+
+通常workerによる先行処理を避けるため、テストメールを投入する前にworkerを停止する。
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.greenmail.yml stop worker
+```
+
+正常メールとGTUBEメールをINBOXへ投入し、初期スキャンをプレビューする。
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.greenmail.yml --profile tools run --rm admin initial-scan preview --folder INBOX --since-date 2020-01-01 --through-date 2029-12-31 --timezone Asia/Tokyo --max-messages 10 --max-moves 1 --batch-size 1 --threshold 5.0
+```
+
+次を確認する。
+
+- `target_count`が投入件数と一致する
+- GTUBEだけが`scan_candidate`として表示される
+- プレビュー後も両方のメールがINBOXにある
+- 出力に`job_id`と`confirmation_token`がある
+
+出力値を指定して適用し、GTUBEだけがJunkへ移動することを確認する。
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.greenmail.yml --profile tools run --rm admin initial-scan apply --job-id PREVIEW_JOB_ID --confirm CONFIRMATION_TOKEN
+```
+
+初期学習は、確認済みメールを専用フォルダーへコピーしてから同様にpreview、applyの順で確認する。apply後も元メールが同じフォルダーに残ることと、同じ範囲の再実行で`skipped_count`が増え、Bayes件数が再度増加しないことを確認する。
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.greenmail.yml --profile tools run --rm admin initial-learn preview --folder Learn-Ham --type ham --since-date 2020-01-01 --through-date 2029-12-31 --timezone Asia/Tokyo --max-messages 10 --batch-size 1
+```
+
+中断・再開、UIDVALIDITY変更、確認トークン、件数上限、重複防止の状態遷移は次の自動テストでも検証する。
+
+```sh
+python3 -m unittest -v tests/test_admin.py tests/test_imap_compat.py
+```
+
+テスト後にworkerを再開する。
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.greenmail.yml start worker
+```
+
 ## 停止と初期化
 
 ```sh

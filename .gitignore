@@ -1,5 +1,8 @@
 .DS_Store
 .env
+env/
+__pycache__/
+*.py[cod]
 secrets/*
 !secrets/.gitkeep
 tests/greenmail/messages/real-*.eml

@@ -34,7 +34,8 @@ services:
 
   worker:
     build:
-      context: ./worker
+      context: .
+      dockerfile: worker/Dockerfile
     restart: unless-stopped
     depends_on:
       spamassassin:
@@ -62,10 +63,13 @@ services:
       DRY_RUN: ${DRY_RUN:-true}
       RETRY_INITIAL_SECONDS: ${RETRY_INITIAL_SECONDS:-5}
       RETRY_MAX_SECONDS: ${RETRY_MAX_SECONDS:-300}
+      STATE_DIR: /var/lib/mail-sentinel-state
     secrets:
       - imap_password
     tmpfs:
       - /tmp:size=16m,mode=1777
+    volumes:
+      - mail-sentinel-state:/var/lib/mail-sentinel-state
     read_only: true
     cap_drop:
       - ALL
@@ -79,6 +83,42 @@ services:
     networks:
       - mail-sentinel
 
+  admin:
+    profiles: ["tools"]
+    build:
+      context: .
+      dockerfile: admin/Dockerfile
+    depends_on:
+      spamassassin:
+        condition: service_healthy
+    environment:
+      IMAP_HOST: ${IMAP_HOST:-}
+      IMAP_PORT: ${IMAP_PORT:-993}
+      IMAP_TLS_MODE: ${IMAP_TLS_MODE:-implicit}
+      IMAP_USERNAME: ${IMAP_USERNAME:-}
+      IMAP_PASSWORD_FILE: /run/secrets/imap_password
+      IMAP_JUNK: ${IMAP_JUNK:-Junk}
+      IMAP_TIMEOUT_SECONDS: ${IMAP_TIMEOUT_SECONDS:-30}
+      SPAMD_HOST: spamassassin
+      SPAMD_PORT: 783
+      SPAMC_MAX_SIZE_BYTES: ${SPAMC_MAX_SIZE_BYTES:-10485760}
+      STATE_DIR: /var/lib/mail-sentinel-state
+      RULESET_MARKER: ${RULESET_MARKER:-}
+    secrets:
+      - imap_password
+    volumes:
+      - mail-sentinel-state:/var/lib/mail-sentinel-state
+      - spamassassin-rules:/var/lib/spamassassin:ro
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - mail-sentinel
+
 secrets:
   imap_password:
     file: ${IMAP_PASSWORD_SECRET_FILE:-./secrets/imap_password}
@@ -86,6 +126,7 @@ secrets:
 volumes:
   spamassassin-data:
   spamassassin-rules:
+  mail-sentinel-state:
 
 networks:
   mail-sentinel:
