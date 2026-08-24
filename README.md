@@ -2,7 +2,7 @@
 
 ![Mail Sentinel Dockerのシステム構成](docs/system-infographic.png)
 
-Mail Sentinel Dockerは、IMAPメールボックスの新着メールをSpamAssassinで検査し、迷惑メールを同じメールボックスのJunkフォルダーへ移動するDocker ComposeベースのPoCです。
+Mail Sentinel Dockerは、IMAPメールボックスの新着メールをSpamAssassinで検査し、迷惑メールを同じメールボックスのJunkフォルダーへ移動するDocker Composeベースのメール振り分けシステムです。
 
 既存のSMTP/MX設定やメール配送経路は変更しません。普段使っているメールクライアントと同様にIMAPで接続するため、PCやスマートフォンからも振り分け結果を共有できます。
 
@@ -20,7 +20,7 @@ Mail Sentinel Dockerは、IMAPメールボックスの新着メールをSpamAssa
 
 ## 注意事項
 
-このプロジェクトはPoCです。実メールボックスへ接続する前にバックアップを取得し、メールプロバイダーの利用条件とIMAP仕様を確認してください。
+本ソフトウェアはIMAPメールボックスのフラグ変更とメール移動を行います。実メールボックスへ接続する前にバックアップを取得し、メールプロバイダーの利用条件、IMAP仕様、対象フォルダーを確認してください。
 
 初回は必ず`DRY_RUN=true`のまま起動してください。ドライランではメールの取得と採点のみを行い、移動、削除、フラグ変更は行いません。メールの自動削除、OAuth 2.0トークンの自動更新、管理画面には対応していません。
 
@@ -174,11 +174,13 @@ python3 -m unittest discover -s tests -v
 
 不具合報告と機能要望は[GitHub Issues](https://github.com/Shimahukuro/mail-sentinel-docker/issues)を利用してください。パスワード、アクセストークン、実際のメールアドレス、メール本文などの機密情報は、DiscussionやIssueへ投稿しないでください。
 
+脆弱性の可能性がある問題は公開投稿せず、[Security Policy](.github/SECURITY.md)に従ってGitHubのPrivate vulnerability reportingから非公開で報告してください。
+
 ## ドキュメント
 
 - [クイックスタート](docs/quick-start.md) — cloneからドライラン、本番運用への切り替えまでの最短手順
 - [ユーザーガイド](docs/user-guide.md) — 詳細な導入手順、設定、初期学習、初期スキャン、トラブルシューティング
-- [最小PoCセットアップ](docs/poc-setup.md) — 最短の検証手順
+- [最小セットアップ](docs/poc-setup.md) — 最短の検証手順
 - [システム概要](docs/system-overview.md) — アーキテクチャ、処理フロー、設計原則
 - [運用Runbook](docs/operations-runbook.md) — 監視、障害対応、通知、ルール更新、バックアップと復元
 - [GreenMailによるローカルテスト](docs/greenmail-test.md) — GreenMailとRoundcubeを使った検証
