@@ -31,7 +31,7 @@ Mail Sentinel Dockerは、IMAPメールボックスの新着メールをSpamAssa
 - IMAPまたはIMAPSを利用できるメールアカウント
 - パスワードまたはアプリパスワード
 
-WindowsではDocker DesktopをLinuxコンテナモードで使用してください。
+WindowsではDocker DesktopのLinuxコンテナ（既定）を使用してください。`docker info --format '{{.OSType}}'`が`windows`を表示する場合だけ、Docker Desktopのメニューから`Switch to Linux containers`を選択します。
 
 ## クイックスタート
 
@@ -168,8 +168,15 @@ python3 -m unittest discover -s tests -v
 
 実際のIMAP操作を含むローカル統合テストについては[GreenMailによるローカルテスト](docs/greenmail-test.md)を参照してください。
 
+## サポート・問い合わせ
+
+インストール、設定、操作方法についての質問は、[Q&Aを新規作成](https://github.com/Shimahukuro/mail-sentinel-docker/discussions/new?category=q-a)から投稿してください。リンクを開くと、GitHub DiscussionsのQ&Aカテゴリを選択した新規投稿フォームが表示されます。質問には、利用OS、Dockerのバージョン、実行したコマンド、Secretを除いたエラーメッセージを記載すると状況を確認しやすくなります。
+
+不具合報告と機能要望は[GitHub Issues](https://github.com/Shimahukuro/mail-sentinel-docker/issues)を利用してください。パスワード、アクセストークン、実際のメールアドレス、メール本文などの機密情報は、DiscussionやIssueへ投稿しないでください。
+
 ## ドキュメント
 
+- [クイックスタート](docs/quick-start.md) — cloneからドライラン、本番運用への切り替えまでの最短手順
 - [ユーザーガイド](docs/user-guide.md) — 詳細な導入手順、設定、初期学習、初期スキャン、トラブルシューティング
 - [最小PoCセットアップ](docs/poc-setup.md) — 最短の検証手順
 - [システム概要](docs/system-overview.md) — アーキテクチャ、処理フロー、設計原則

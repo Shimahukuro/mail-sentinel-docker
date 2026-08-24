@@ -46,7 +46,7 @@ Mail Sentinelを停止しても、メールサーバーによる受信や通常�
 
 - `共通`と記載したコマンドは、macOS/LinuxのターミナルとWindows PowerShellのどちらでも実行できる。
 - OSごとに構文が異なる操作は、`macOS/Linux`と`Windows PowerShell`を分けて記載する。
-- WindowsではDocker DesktopをLinuxコンテナモードで起動し、PowerShellから実行する。詳しい前提条件は「15. Windowsで利用する場合」を参照する。
+- WindowsではDocker DesktopのLinuxコンテナ（既定）を使用し、PowerShellから実行する。`docker info --format '{{.OSType}}'`が`windows`を表示する場合だけLinuxコンテナへ切り替える。詳しい前提条件は「15. Windowsで利用する場合」を参照する。
 - コマンドは、いずれもリポジトリのルートディレクトリで実行する。
 
 ## 4. 初期設定

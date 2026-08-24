@@ -1,0 +1,65 @@
+title: "[Q&A] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Mail Sentinel Dockerについて質問していただき、ありがとうございます。
+
+        > [!WARNING]
+        > **個人情報や機密情報を記載しないでください。**
+        >
+        > パスワード、アプリパスワード、アクセストークン、Webhook URL、実際のメールアドレス、氏名、メール本文・件名・送信者、Secretファイルの内容は投稿しないでください。ログやスクリーンショットにもこれらの情報が含まれていないことを確認してください。
+
+  - type: dropdown
+    id: operating-system
+    attributes:
+      label: 利用OS
+      description: Mail Sentinel Dockerを実行しているOSを選択してください。
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - その他
+    validations:
+      required: true
+
+  - type: input
+    id: docker-version
+    attributes:
+      label: Dockerのバージョン
+      description: "`docker version`と`docker compose version`で確認できます。個人情報や環境固有の名前は除いてください。"
+      placeholder: "例: Docker 28.x / Docker Compose v2.x"
+    validations:
+      required: true
+
+  - type: textarea
+    id: question
+    attributes:
+      label: 質問内容
+      description: 実現したいこと、現在の状況、分からない点を説明してください。
+      placeholder: 個人情報や機密情報を含めずに記載してください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: commands
+    attributes:
+      label: 実行したコマンド
+      description: 問題が発生するまでに実行したコマンドを記載してください。コマンド内のユーザー名、パス、Secretなどは伏せてください。
+      placeholder: docker compose ...
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: エラーまたはログ
+      description: 必要な部分だけを記載してください。投稿前に、アカウント情報、メール情報、Secret、ローカルパスなどを削除してください。
+      placeholder: 機密情報を除いたエラーメッセージまたはログ
+
+  - type: checkboxes
+    id: privacy-confirmation
+    attributes:
+      label: 投稿内容の確認
+      description: 投稿内容は公開され、インターネット上の誰でも閲覧できます。
+      options:
+        - label: 個人情報、認証情報、メール内容、その他の機密情報が含まれていないことを確認しました。
+          required: true
