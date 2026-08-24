@@ -81,6 +81,39 @@ class CapabilityTests(unittest.TestCase):
         self.assertEqual(mailbox.name, "Bulk Mail")
         self.assertEqual(mailbox.wire_name, b'"Bulk Mail"')
 
+    def test_configured_name_takes_priority_over_special_use(self):
+        connection = FakeIMAP(
+            b"IMAP4rev1 MOVE SPECIAL-USE",
+            [
+                b'(\\HasNoChildren \\Junk) "/" "Spam"',
+                b'(\\HasNoChildren) "/" "Junk_Mail-Sentinel"',
+            ],
+        )
+        mailbox = CapabilityIMAP(connection).resolve("Junk_Mail-Sentinel", "\\Junk")
+        self.assertEqual(mailbox.name, "Junk_Mail-Sentinel")
+        self.assertNotIn("\\junk", mailbox.flags)
+
+    def test_unique_special_use_is_fallback_when_configured_name_is_missing(self):
+        connection = FakeIMAP(
+            b"IMAP4rev1 MOVE SPECIAL-USE",
+            [b'(\\HasNoChildren \\Junk) "/" "Spam"'],
+        )
+        mailbox = CapabilityIMAP(connection).resolve("Missing", "\\Junk")
+        self.assertEqual(mailbox.name, "Spam")
+
+    def test_multiple_special_use_fallbacks_are_rejected_as_ambiguous(self):
+        connection = FakeIMAP(
+            b"IMAP4rev1 MOVE SPECIAL-USE",
+            [
+                b'(\\HasNoChildren \\Junk) "/" "Spam"',
+                b'(\\HasNoChildren \\Junk) "/" "Old Spam"',
+            ],
+        )
+        with self.assertRaisesRegex(
+            RuntimeError, r"multiple IMAP folders have special-use \\Junk: Spam, Old Spam"
+        ):
+            CapabilityIMAP(connection).resolve("Missing", "\\Junk")
+
 
 if __name__ == "__main__":
     unittest.main()

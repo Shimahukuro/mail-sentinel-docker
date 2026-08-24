@@ -96,7 +96,7 @@ Copy-Item docker-compose.accounts.example.yml config/docker-compose.accounts.yml
 | `IMAP_TLS_MODE` | `implicit`、`starttls`、`none` | 実環境では`implicit` |
 | `IMAP_USERNAME` | IMAPログイン名 | 対象アカウント |
 | `IMAP_INBOX` | 監視フォルダー | `INBOX` |
-| `IMAP_JUNK` | 迷惑メール移動先 | 実際のフォルダー名 |
+| `IMAP_JUNK` | 迷惑メール移動先。大文字・小文字を含む完全なフォルダー名 | 実際のフォルダー名 |
 | `LEARNING_ENABLED` | ユーザーフィードバック学習を有効にするか | 初回は`false` |
 | `IMAP_LEARN_HAM` | 正常メール学習用IMAPフォルダー | `Learn-Ham` |
 | `IMAP_LEARN_SPAM` | 迷惑メール学習用IMAPフォルダー | `Learn-Spam` |
@@ -113,7 +113,30 @@ Copy-Item docker-compose.accounts.example.yml config/docker-compose.accounts.yml
 
 共通値はトップレベルの`defaults`へ、アカウント固有値は各`environment`へ記述する。`IMAP_TLS_MODE=none`は、GreenMailなどローカルの隔離されたテスト環境だけで使用する。
 
-### 4.2 ユーザーフィードバック学習
+### 4.2 Junkフォルダーの指定と`\Junk`属性
+
+`\Junk`はフォルダー名ではなく、IMAPサーバーが迷惑メール用フォルダーに付けるSpecial-Use属性である。例えば、サーバーが「迷惑メール」を`\Junk`として通知する場合がある。`Junk_Mail-Sentinel`のような通常フォルダーを作成しても、それだけで`\Junk`属性が付くとは限らない。
+
+Mail Sentinelは、移動先を次の順序で決定する。
+
+1. `IMAP_JUNK`と完全一致するフォルダーを優先する。`INBOX`以外は大文字・小文字も区別する。
+2. 指定フォルダーが存在しない場合だけ、`\Junk`属性を持つ唯一のフォルダーへフォールバックする。
+3. 指定フォルダーが存在せず、`\Junk`属性フォルダーが複数ある場合は、移動先が曖昧なため診断エラーとする。
+4. 指定フォルダーも`\Junk`属性フォルダーも存在しない場合は、Junkフォルダー不在として扱う。
+
+専用フォルダーを使用する場合は、メールクライアントまたはWebメールで先に作成し、表示された名前と同じ文字列を設定する。
+
+```json
+"IMAP_JUNK": "Junk_Mail-Sentinel"
+```
+
+起動前診断で選択結果を確認できる。`source` が `configured` なら設定名との一致、`special_use` なら`\Junk`属性へのフォールバックである。
+
+```json
+{"event":"startup_diagnostic","check":"junk_folder","folder":"Junk_Mail-Sentinel","source":"configured","result":"pass"}
+```
+
+### 4.3 ユーザーフィードバック学習
 
 学習機能を利用する場合は、メールクライアントまたはプロバイダーのWebメールで`Learn-Ham`と`Learn-Spam`を事前に作成する。workerは実環境の学習フォルダーを自動作成しない。
 
@@ -137,7 +160,7 @@ Copy-Item docker-compose.accounts.example.yml config/docker-compose.accounts.yml
 
 IMAPキーワード方式では学習済みメールに`LEARNED_FLAG`が付く。ローカルDB方式では同じ状態をSQLiteへ保存する。どちらも学習成功後に移動だけが失敗した場合、次回はBayes学習を繰り返さず移動だけを再試行する。キーワード方式のhamには`PROCESSED_FLAG`も付くため、INBOXへ戻った直後に通常判定されない。ローカルDB方式で移動先UIDを取得できない場合は、安全側で通常判定を一度行うことがある。
 
-### 4.3 IMAPパスワード
+### 4.4 IMAPパスワード
 
 パスワードは`accounts.json`へ記載せず、Secretファイルへ保存する。
 
@@ -173,7 +196,7 @@ finally {
 
 `config/accounts.json`と`secrets/*`はGitの管理対象外である。Secretファイルを他のOSユーザーと共有しない。共用PCではファイルのアクセス権も制限する。
 
-### 4.4 Gmailで使用する場合
+### 4.5 Gmailで使用する場合
 
 Gmailは、ユーザー名と通常のGoogleアカウントパスワードを第三者アプリへ渡す認証をサポートしていない。Mail Sentinelでパスワード系のIMAP認証を使用する場合は、Googleアカウントの2段階認証を有効にし、Mail Sentinel専用のアプリパスワードを発行する。
 
@@ -511,7 +534,7 @@ docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml run -
 
 ### Junkフォルダーが存在しない
 
-実環境ではメールクライアントまたはプロバイダーのWebメールからJunkフォルダーを作成し、`accounts.json`の`IMAP_JUNK`を一致させることを推奨する。
+実環境ではメールクライアントまたはプロバイダーのWebメールからJunkフォルダーを作成し、`accounts.json`の`IMAP_JUNK`を大文字・小文字も含めて一致させることを推奨する。設定名が存在しない場合の`\Junk`フォールバックについては「[Junkフォルダーの指定と`\Junk`属性](#42-junkフォルダーの指定とjunk属性)」を参照する。
 
 自動作成する場合だけ次を指定する。
 

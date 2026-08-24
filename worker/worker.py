@@ -446,7 +446,8 @@ def diagnose() -> int:
         junk = client.resolve(required("IMAP_JUNK"), "\\junk")
         log("info", "startup_diagnostic", check="inbox_folder", folder=inbox.name, result="pass")
         log("info", "startup_diagnostic", check="junk_folder", folder=junk.name,
-            source="special_use" if "\\junk" in junk.flags else "configured", result="pass")
+            source="configured" if junk.name == required("IMAP_JUNK") else "special_use",
+            result="pass")
         # SELECT does not modify messages and is required here because some
         # servers omit writable PERMANENTFLAGS from read-only EXAMINE replies.
         select(connection, inbox)

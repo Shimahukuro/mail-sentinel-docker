@@ -117,11 +117,6 @@ class CapabilityIMAP:
 
     def resolve(self, configured_name: str, special_use: str | None = None) -> MailboxInfo:
         mailboxes = self.mailboxes()
-        if special_use:
-            expected = special_use.lower()
-            for mailbox in mailboxes:
-                if expected in mailbox.flags:
-                    return mailbox
         # RFC 3501 and RFC 9051 reserve INBOX as the only mailbox name
         # that is always case-insensitive.  Preserve the server's wire form
         # after matching it; all other mailbox names remain exact matches
@@ -134,4 +129,14 @@ class CapabilityIMAP:
         for mailbox in mailboxes:
             if mailbox.name == configured_name:
                 return mailbox
+        if special_use:
+            expected = special_use.lower()
+            matches = [mailbox for mailbox in mailboxes if expected in mailbox.flags]
+            if len(matches) == 1:
+                return matches[0]
+            if len(matches) > 1:
+                names = ", ".join(mailbox.name for mailbox in matches)
+                raise RuntimeError(
+                    f"multiple IMAP folders have special-use {special_use}: {names}"
+                )
         raise RuntimeError(f"configured IMAP folder does not exist: {configured_name}")

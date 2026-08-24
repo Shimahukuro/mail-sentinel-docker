@@ -75,6 +75,8 @@ Copy-Item docker-compose.accounts.example.yml config/docker-compose.accounts.yml
 
 実際には、コピーしたファイルの`defaults`も残してください。初回確認が終わるまでは`DRY_RUN`を`true`にします。
 
+`IMAP_JUNK`と完全一致するフォルダーが優先されます。存在しない場合だけ、IMAPサーバーが通知する唯一の`\Junk` Special-Useフォルダーへフォールバックします。詳細は[ユーザーガイド](docs/user-guide.md#42-junkフォルダーの指定とjunk属性)を参照してください。
+
 ### 2. IMAPパスワードを保存する
 
 macOS / Linux:
@@ -90,7 +92,7 @@ chmod 600 secrets/imap_primary_password
 
 パスワードを`accounts.json`へ直接記載しないでください。`config/*`と`secrets/*`は`.gitignore`で除外されています。
 
-Gmailへ接続する場合、通常のGoogleアカウントパスワードは使用できません。Googleアカウントで2段階認証を有効にして[アプリパスワード](https://support.google.com/accounts/answer/2461835)を発行し、その値をSecretファイルへ保存します。`config/accounts.json`では`IMAP_HOST`を`imap.gmail.com`、`IMAP_AUTH_METHOD`を`app_password`に設定してください。Google Workspaceの管理ポリシーや高度な保護機能によりアプリパスワードを利用できない場合があります。詳しくは[ユーザーガイドのGmail設定](docs/user-guide.md#44-gmailで使用する場合)を参照してください。
+Gmailへ接続する場合、通常のGoogleアカウントパスワードは使用できません。Googleアカウントで2段階認証を有効にして[アプリパスワード](https://support.google.com/accounts/answer/2461835)を発行し、その値をSecretファイルへ保存します。`config/accounts.json`では`IMAP_HOST`を`imap.gmail.com`、`IMAP_AUTH_METHOD`を`app_password`に設定してください。Google Workspaceの管理ポリシーや高度な保護機能によりアプリパスワードを利用できない場合があります。詳しくは[ユーザーガイドのGmail設定](docs/user-guide.md#45-gmailで使用する場合)を参照してください。
 
 ### 3. 構成を検証して起動する
 
