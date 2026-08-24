@@ -90,6 +90,8 @@ chmod 600 secrets/imap_primary_password
 
 パスワードを`accounts.json`へ直接記載しないでください。`config/*`と`secrets/*`は`.gitignore`で除外されています。
 
+Gmailへ接続する場合、通常のGoogleアカウントパスワードは使用できません。Googleアカウントで2段階認証を有効にして[アプリパスワード](https://support.google.com/accounts/answer/2461835)を発行し、その値をSecretファイルへ保存します。`config/accounts.json`では`IMAP_HOST`を`imap.gmail.com`、`IMAP_AUTH_METHOD`を`app_password`に設定してください。Google Workspaceの管理ポリシーや高度な保護機能によりアプリパスワードを利用できない場合があります。詳しくは[ユーザーガイドのGmail設定](docs/user-guide.md#44-gmailで使用する場合)を参照してください。
+
 ### 3. 構成を検証して起動する
 
 ```sh

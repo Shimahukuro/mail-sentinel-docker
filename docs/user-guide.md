@@ -173,6 +173,43 @@ finally {
 
 `config/accounts.json`と`secrets/*`はGitの管理対象外である。Secretファイルを他のOSユーザーと共有しない。共用PCではファイルのアクセス権も制限する。
 
+### 4.4 Gmailで使用する場合
+
+Gmailは、ユーザー名と通常のGoogleアカウントパスワードを第三者アプリへ渡す認証をサポートしていない。Mail Sentinelでパスワード系のIMAP認証を使用する場合は、Googleアカウントの2段階認証を有効にし、Mail Sentinel専用のアプリパスワードを発行する。
+
+1. Googleアカウントで2段階認証を有効にする。
+2. Googleアカウントの[アプリパスワード](https://support.google.com/accounts/answer/2461835)を開く。
+3. Mail Sentinel用のアプリパスワードを発行する。
+4. 表示されたアプリパスワードを`secrets/imap_primary_password`へ保存する。
+5. Googleアカウントの通常パスワードはSecretファイルへ保存しない。
+
+`config/accounts.json`のアカウント設定例:
+
+```json
+{
+  "name": "gmail",
+  "environment": {
+    "IMAP_HOST": "imap.gmail.com",
+    "IMAP_PORT": 993,
+    "IMAP_TLS_MODE": "implicit",
+    "IMAP_AUTH_METHOD": "app_password",
+    "IMAP_USERNAME": "user@gmail.com",
+    "IMAP_PASSWORD_FILE": "/run/secrets/imap_primary_password",
+    "IMAP_JUNK": "[Gmail]/Spam"
+  }
+}
+```
+
+個人用GmailではIMAPアクセスは常時有効であり、Gmail画面でIMAPを個別に有効化する必要はない。Googleは、対応アプリでは「Googleでログイン」によるOAuth認証を推奨している。詳しくは[Google公式のメールクライアント設定](https://support.google.com/mail/answer/7126229)を参照する。
+
+次の場合はアプリパスワードを利用できないことがある。
+
+- Google Workspaceの管理者が利用を許可していない
+- 職場、学校、その他の組織が認証方法を制限している
+- Googleアカウントで高度な保護機能を使用している
+
+アプリパスワードを利用できない場合は、組織の管理者へ認証方式を確認する。現行のMail Sentinelは、外部で事前取得したアクセストークンによるXOAUTH2認証に対応するが、アクセストークンの取得、自動更新、再認可は行わない。期限切れ前に外部の安全な仕組みでSecretを更新し、workerを再起動する必要がある。
+
 ## 5. 初回起動
 
 ### 5.1 設定内容の確認
