@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import tempfile
@@ -40,6 +41,22 @@ class ProcessedMethodTests(unittest.TestCase):
 
 
 class WorkerStateTests(unittest.TestCase):
+    def test_runtime_version_is_persisted_for_status_and_audit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.dict(os.environ, {"STATE_DIR": directory}, clear=True):
+                state = worker.WorkerState()
+                try:
+                    state.record_runtime_version("0.1.0")
+                    status = state.operations.snapshot()["status"]["mail_sentinel_version"]
+                    self.assertEqual(status["value"], "0.1.0")
+                    audit = state.db.execute(
+                        "SELECT action,details FROM audit_events ORDER BY id DESC LIMIT 1"
+                    ).fetchone()
+                    self.assertEqual(audit["action"], "runtime_version_recorded")
+                    self.assertEqual(json.loads(audit["details"])["version"], "0.1.0")
+                finally:
+                    state.close()
+
     def test_processed_uids_are_scoped_by_folder_and_uidvalidity(self):
         with tempfile.TemporaryDirectory() as directory:
             with patch.dict(os.environ, {"STATE_DIR": directory}, clear=True):
@@ -63,6 +80,60 @@ class WorkerStateTests(unittest.TestCase):
                     self.assertEqual(state.learning_status("Learn-Spam", 10, 9, "spam"), "moved")
                 finally:
                     state.close()
+
+    def test_new_github_release_notifies_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            environment = {
+                "STATE_DIR": directory,
+                "NOTIFICATION_ENABLED": "true",
+                "NOTIFICATION_UPDATE_ENABLED": "true",
+                "VERSION_CHECK_INTERVAL_SECONDS": "1",
+            }
+            with patch.dict(os.environ, environment, clear=True):
+                state = worker.WorkerState()
+                try:
+                    with patch.object(state.notifier, "send", return_value=True) as send:
+                        state.check_for_update(
+                            "0.1.0", lambda: ("v0.2.0", "https://example.invalid/v0.2.0")
+                        )
+                        state.check_for_update(
+                            "0.1.0", lambda: ("v0.2.0", "https://example.invalid/v0.2.0")
+                        )
+                    send.assert_called_once_with(
+                        "update_available", current_version="0.1.0", latest_version="v0.2.0",
+                        release_url="https://example.invalid/v0.2.0"
+                    )
+                    value = state.db.execute(
+                        "SELECT value FROM runtime_status WHERE key='version_update_notified'"
+                    ).fetchone()[0]
+                    self.assertEqual(json.loads(value), "v0.2.0")
+                finally:
+                    state.close()
+
+    def test_failed_update_notification_is_not_marked_as_sent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            environment = {
+                "STATE_DIR": directory,
+                "NOTIFICATION_ENABLED": "true",
+                "NOTIFICATION_UPDATE_ENABLED": "true",
+            }
+            with patch.dict(os.environ, environment, clear=True):
+                state = worker.WorkerState()
+                try:
+                    with patch.object(state.notifier, "send", side_effect=RuntimeError("temporary")):
+                        state.check_for_update(
+                            "0.1.0", lambda: ("v0.2.0", "https://example.invalid/v0.2.0")
+                        )
+                    value = state.db.execute(
+                        "SELECT value FROM runtime_status WHERE key='version_update_notified'"
+                    ).fetchone()
+                    self.assertIsNone(value)
+                finally:
+                    state.close()
+
+    def test_semantic_version_comparison(self):
+        self.assertGreater(worker.version_key("v1.2.0"), worker.version_key("1.1.9"))
+        self.assertGreater(worker.version_key("1.0.0"), worker.version_key("1.0.0-rc.1"))
 
 
 if __name__ == "__main__":

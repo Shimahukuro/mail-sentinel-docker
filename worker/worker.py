@@ -14,6 +14,7 @@ import re
 import sqlite3
 import subprocess
 import time
+import urllib.request
 from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -44,6 +45,40 @@ CREATE TABLE IF NOT EXISTS learning_messages (
 );
 """
 
+VERSION_FILE = Path(os.environ.get("MAIL_SENTINEL_VERSION_FILE", "/usr/share/mail-sentinel/VERSION"))
+LATEST_RELEASE_URL = "https://api.github.com/repos/Shimahukuro/mail-sentinel-docker/releases/latest"
+
+
+def current_version() -> str:
+    try:
+        return VERSION_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return "development"
+
+
+def version_key(value: str) -> tuple[int, int, int, int]:
+    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)(?:-([^+]+))?(?:\+.+)?", value)
+    if not match:
+        raise ValueError(f"unsupported version: {value}")
+    return (*map(int, match.group(1, 2, 3)), 0 if match.group(4) else 1)
+
+
+def latest_release() -> tuple[str, str]:
+    request = urllib.request.Request(
+        LATEST_RELEASE_URL,
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "mail-sentinel"},
+    )
+    timeout = int(os.environ.get("VERSION_CHECK_TIMEOUT_SECONDS", "10"))
+    if timeout < 1:
+        raise RuntimeError("VERSION_CHECK_TIMEOUT_SECONDS must be positive")
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        document = json.load(response)
+    tag = document.get("tag_name")
+    url = document.get("html_url")
+    if not isinstance(tag, str) or not isinstance(url, str):
+        raise RuntimeError("GitHub latest release response is invalid")
+    return tag, url
+
 
 class WorkerState:
     def __init__(self) -> None:
@@ -57,6 +92,10 @@ class WorkerState:
 
     def close(self) -> None:
         self.db.close()
+
+    def record_runtime_version(self, version: str) -> None:
+        self.operations.set_status("mail_sentinel_version", version)
+        self.operations.audit("runtime_version_recorded", "success", version=version)
 
     def processed(self, folder: str, uidvalidity: int, uids: list[int]) -> set[int]:
         if not uids:
@@ -108,6 +147,52 @@ class WorkerState:
                 self.operations.increment("notification_failed_count")
                 log("warn", "notification_failed", event_code=event_code, recovery=True,
                     error_type=type(notify_error).__name__)
+
+    def check_for_update(self, version: str, fetch_latest=latest_release) -> None:
+        if (os.environ.get("NOTIFICATION_UPDATE_ENABLED", "true").lower() != "true"
+                or not self.notifier.enabled()):
+            return
+        try:
+            interval = int(os.environ.get("VERSION_CHECK_INTERVAL_SECONDS", "86400"))
+            if interval < 1:
+                raise RuntimeError("VERSION_CHECK_INTERVAL_SECONDS must be positive")
+            row = self.db.execute(
+                "SELECT updated_at FROM runtime_status WHERE key='version_check_latest'"
+            ).fetchone()
+            if row:
+                checked_at = datetime.fromisoformat(row[0].replace("Z", "+00:00"))
+                if datetime.now(timezone.utc) - checked_at < timedelta(seconds=interval):
+                    return
+            latest, release_url = fetch_latest()
+            update_available = version_key(latest) > version_key(version)
+        except Exception as error:
+            self.operations.increment("version_check_failed_count")
+            log("warn", "version_check_failed", error_type=type(error).__name__)
+            return
+        self.operations.set_status(
+            "version_check_latest", {"current_version": version, "latest_version": latest}
+        )
+        log("info", "version_check_complete", current_version=version,
+            latest_version=latest, update_available=update_available)
+        if not update_available:
+            return
+        notified = self.db.execute(
+            "SELECT value FROM runtime_status WHERE key='version_update_notified'"
+        ).fetchone()
+        if notified and json.loads(notified[0]) == latest:
+            return
+        try:
+            sent = self.notifier.send(
+                "update_available", current_version=version,
+                latest_version=latest, release_url=release_url,
+            )
+        except Exception as notify_error:
+            self.operations.increment("notification_failed_count")
+            log("warn", "notification_failed", event_code="update_available",
+                error_type=type(notify_error).__name__)
+            return
+        if sent:
+            self.operations.set_status("version_update_notified", latest)
 
 
 def utc_now() -> str:
@@ -345,6 +430,7 @@ def scan_once() -> None:
     state = WorkerState()
     connection = None
     try:
+        state.check_for_update(current_version())
         try:
             connection, client = connect()
             state.operations.set_status("last_imap_success", True)
@@ -513,6 +599,7 @@ def run() -> int:
     paths = lock_paths()
     state = WorkerState()
     try:
+        state.record_runtime_version(current_version())
         configuration = {
             key: value for key, value in os.environ.items()
             if key.startswith(("IMAP_", "POLL_", "BATCH_", "LEARNING_", "RETRY_", "NOTIFICATION_"))
@@ -522,7 +609,8 @@ def run() -> int:
         state.operations.audit("worker_configuration_loaded", "success", fingerprint=fingerprint)
     finally:
         state.close()
-    log("info", "worker_started", poll_interval_seconds=positive("POLL_INTERVAL_SECONDS"))
+    log("info", "worker_started", version=current_version(),
+        poll_interval_seconds=positive("POLL_INTERVAL_SECONDS"))
     while True:
         try:
             with ExitStack() as stack:
@@ -556,6 +644,8 @@ def main() -> int:
     mode.add_argument("--diagnose", action="store_true")
     mode.add_argument("--setup", action="store_true")
     args = parser.parse_args()
+    log("info", "application_started", version=current_version(),
+        mode="diagnose" if args.diagnose else "setup" if args.setup else "worker")
     try:
         if args.diagnose:
             return diagnose()

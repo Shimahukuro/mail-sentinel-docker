@@ -181,7 +181,7 @@ class Notifier:
     def enabled(self) -> bool:
         return os.environ.get("NOTIFICATION_ENABLED", "false").lower() == "true"
 
-    def send(self, event_code: str, recovery: bool = False) -> bool:
+    def send(self, event_code: str, recovery: bool = False, **details: object) -> bool:
         if not self.enabled():
             return False
         if recovery and os.environ.get("NOTIFICATION_RECOVERY_ENABLED", "true").lower() != "true":
@@ -194,6 +194,7 @@ class Notifier:
             "source": "mail-sentinel", "event_code": event_code,
             "state": "recovered" if recovery else "firing",
             "account_id": os.environ.get("MAIL_SENTINEL_ACCOUNT_ID"), "timestamp": utc_now(),
+            **details,
         }, separators=(",", ":")).encode()
         request = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(request, timeout=env_int("NOTIFICATION_TIMEOUT_SECONDS", 10)) as response:

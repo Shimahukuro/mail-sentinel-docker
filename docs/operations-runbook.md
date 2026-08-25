@@ -19,6 +19,14 @@ docker compose --profile tools run --rm admin --account primary incidents
 
 外部接続を含む確認には`health --live`を使用する。出力にはメール本文、件名、送信者、完全なアカウント名を含めない。
 
+Mail Sentinelの利用バージョンは、worker起動時の`application_started`および`worker_started`ログの`version`で確認できる。永続状態の`mail_sentinel_version`と`runtime_version_recorded`監査イベントにも記録されるため、障害調査では次の出力を採取する。
+
+```sh
+docker compose logs --tail=200 worker
+docker compose --profile tools run --rm admin --account primary status
+docker compose --profile tools run --rm admin --account primary audit --limit 100
+```
+
 ## 通知
 
 汎用HTTP Webhookを使用する場合、Webhook URLだけを含むSecretを作り、workerとadminの`/run/secrets/notification_webhook_url`へマウントする。アカウント設定へ次を追加する。
@@ -30,11 +38,16 @@ docker compose --profile tools run --rm admin --account primary incidents
   "NOTIFICATION_FAILURE_THRESHOLD": 3,
   "NOTIFICATION_REPEAT_SECONDS": 21600,
   "NOTIFICATION_RECOVERY_ENABLED": true,
+  "NOTIFICATION_UPDATE_ENABLED": true,
+  "VERSION_CHECK_INTERVAL_SECONDS": 86400,
+  "VERSION_CHECK_TIMEOUT_SECONDS": 10,
   "BACKLOG_MESSAGE_THRESHOLD": 100
 }
 ```
 
 同じ障害は閾値到達時に通知され、その後は再通知間隔まで抑制される。正常処理を確認すると復旧通知を送る。通知疎通は次で確認する。
+
+workerはGitHub Releasesの最新安定版を既定で24時間ごとに確認する。`VERSION`より新しいリリースがある場合、`update_available`をリリースごとに1回送信する。Payloadには`current_version`、`latest_version`、`release_url`が含まれる。確認・通知の失敗はメール処理を停止させない。更新通知を止める場合は`NOTIFICATION_UPDATE_ENABLED=false`を設定する。
 
 ```sh
 docker compose --profile tools run --rm admin --account primary notification-test
