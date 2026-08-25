@@ -6,11 +6,30 @@
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-25
+
+Mail Sentinel Dockerの安全なIMAP移動方式、更新通知、導入ドキュメントを強化したメンテナンスリリースです。
+
+### 追加
+
 - GitHub Releasesの最新安定版を定期確認し、更新可能なリリースを既存Webhookへ1回通知する仕組みを追加
 - 稼働バージョンを起動ログ、永続状態、監査イベントへ記録し、障害調査時に確認できるよう改善
 - `MOVE`非対応かつ`UIDPLUS`とユーザー定義キーワードを利用できるIMAPサーバー向けに、明示的な`IMAP_MOVE_FALLBACK=auto`で有効になる再開可能な`COPY`＋`UID EXPUNGE`フォールバックを追加
 - 移動方式を起動前診断へ追加し、安全な方式がない本運用では起動を停止
+
+### 改善
+
+- 設定したJunkフォルダーをSpecial-Use自動検出より優先し、プロバイダー固有フォルダーを確実に選択
 - メール件名、送信者、実フォルダー名、接続先を運用ログへ出さないよう移動関連ログを匿名化
+- Gmailアプリパスワードの取得・設定手順をユーザーガイドへ追加
+- 最短導入手順をまとめたクイックスタートとGitHub DiscussionsのQ&Aフォームを追加
+- 脆弱性の非公開報告先、対応方針、サポート対象を定めたセキュリティポリシーを追加
+
+### バージョンアップ時の注意
+
+- イメージを再ビルドし、workerを再作成してから起動前診断を実行してください。
+- `COPY`＋`UID EXPUNGE`フォールバックは自動では有効になりません。必要なアカウントだけ`IMAP_MOVE_FALLBACK=auto`を明示してください。
+- 更新通知を使用する場合は汎用Webhookを設定し、`NOTIFICATION_UPDATE_ENABLED=true`を指定してください。
 
 ## [0.1.0] - 2026-08-23
 
@@ -62,4 +81,6 @@ Mail Sentinel Dockerの最初のPoCリリースです。既存のメール配送
 
 詳細な導入方法は[README](README.md)と[ユーザーガイド](docs/user-guide.md)を参照してください。
 
+[Unreleased]: https://github.com/Shimahukuro/mail-sentinel-docker/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/Shimahukuro/mail-sentinel-docker/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Shimahukuro/mail-sentinel-docker/releases/tag/v0.1.0
