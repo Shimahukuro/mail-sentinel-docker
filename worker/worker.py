@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from mail_sentinel_imap import CapabilityIMAP, MailboxInfo
+from mail_sentinel_move import SafeMover
 from mail_sentinel_operations import Notifier, OperationsState
 
 
@@ -254,12 +255,11 @@ def add_flags(connection: imaplib.IMAP4, uid: int, flags: list[str]) -> None:
         raise RuntimeError(f"failed to add flags for UID {uid}")
 
 
-def move(connection: imaplib.IMAP4, client: CapabilityIMAP, uid: int, destination: MailboxInfo) -> None:
-    if "MOVE" not in client.capabilities:
-        raise RuntimeError("IMAP server does not support MOVE; unsafe fallback is disabled")
-    status, _ = connection.uid("MOVE", str(uid), destination.wire_name)
-    if status != "OK":
-        raise RuntimeError(f"IMAP MOVE failed for UID {uid}")
+def move(connection: imaplib.IMAP4, client: CapabilityIMAP, state: WorkerState,
+         source: MailboxInfo, generation: int, uid: int, destination: MailboxInfo) -> int | None:
+    return SafeMover(connection, client, state.db).move(
+        source, generation, uid, destination, os.environ.get("IMAP_MOVE_FALLBACK", "disabled")
+    )
 
 
 def resolve_or_create(connection: imaplib.IMAP4, client: CapabilityIMAP, name: str) -> MailboxInfo:
@@ -271,7 +271,7 @@ def resolve_or_create(connection: imaplib.IMAP4, client: CapabilityIMAP, name: s
         status, _ = connection.create(client.argument(name))
         if status != "OK":
             raise RuntimeError(f"failed to create IMAP folder: {name}")
-        log("info", "folder_created", folder=name)
+        log("info", "folder_created")
         return client.resolve(name)
 
 
@@ -294,14 +294,15 @@ def process_learning(connection: imaplib.IMAP4, client: CapabilityIMAP, state: W
     for uid in resumed_uids[:limit]:
         try:
             if not dry_run:
-                move(connection, client, uid, destination)
+                move(connection, client, state, source, generation, uid, destination)
                 if method == "local_database":
                     state.mark_learning(source.name, generation, uid, learn_type, "moved")
             resumed += 1
         except Exception as error:
             failed += 1
             state.failure("learning_move_failed", error)
-            log("warn", "learning_move_failed", uid=uid, learning_type=learn_type, error=str(error))
+            log("warn", "learning_move_failed", uid=uid, learning_type=learn_type,
+                error_type=type(error).__name__)
         processed += 1
     remaining = limit - processed
     pending_uids = (
@@ -320,7 +321,7 @@ def process_learning(connection: imaplib.IMAP4, client: CapabilityIMAP, state: W
                     add_flags(connection, uid, flags)
                 else:
                     state.mark_learning(source.name, generation, uid, learn_type, "learned")
-                move(connection, client, uid, destination)
+                move(connection, client, state, source, generation, uid, destination)
                 if method == "local_database":
                     state.mark_learning(source.name, generation, uid, learn_type, "moved")
             learned += 1
@@ -333,7 +334,8 @@ def process_learning(connection: imaplib.IMAP4, client: CapabilityIMAP, state: W
         except Exception as error:
             failed += 1
             state.failure("learning_failed", error)
-            log("warn", "learning_failed", uid=uid, learning_type=learn_type, error=str(error), retry=True)
+            log("warn", "learning_failed", uid=uid, learning_type=learn_type,
+                error_type=type(error).__name__, retry=True)
         processed += 1
     log("info", "learning_scan_complete", learning_type=learn_type, processed=processed,
         learned=learned, resumed=resumed, failed=failed, dry_run=dry_run)
@@ -391,7 +393,7 @@ def scan_once() -> None:
                 if not dry_run:
                     if classification == "spam":
                         try:
-                            move(connection, client, uid, junk)
+                            move(connection, client, state, inbox, generation, uid, junk)
                             state.success("message_move_failed")
                         except Exception as error:
                             state.failure("message_move_failed", error)
@@ -405,11 +407,11 @@ def scan_once() -> None:
                 state.operations.increment(f"messages_{classification}_count")
                 log("info", "message_classified", uid=uid, classification=classification,
                     score=value, threshold=threshold, action="would_process" if dry_run else "processed",
-                    destination=junk.name if classification == "spam" else None, dry_run=dry_run)
+                    move_required=classification == "spam", dry_run=dry_run)
             except Exception as error:
                 counts["failed"] += 1
                 state.operations.increment("message_failed_count")
-                log("warn", "message_deferred", uid=uid, error=str(error), retry=True)
+                log("warn", "message_deferred", uid=uid, error_type=type(error).__name__, retry=True)
             counts["processed"] += 1
         log("info", "scan_complete", **counts, dry_run=dry_run)
         state.operations.set_status("last_scan_success", counts)
@@ -444,8 +446,8 @@ def diagnose() -> int:
             utf8_enabled=client.utf8_enabled)
         inbox = client.resolve(required("IMAP_INBOX"))
         junk = client.resolve(required("IMAP_JUNK"), "\\junk")
-        log("info", "startup_diagnostic", check="inbox_folder", folder=inbox.name, result="pass")
-        log("info", "startup_diagnostic", check="junk_folder", folder=junk.name,
+        log("info", "startup_diagnostic", check="inbox_folder", result="pass")
+        log("info", "startup_diagnostic", check="junk_folder",
             source="configured" if junk.name == required("IMAP_JUNK") else "special_use",
             result="pass")
         # SELECT does not modify messages and is required here because some
@@ -460,6 +462,16 @@ def diagnose() -> int:
             reason="configured" if required("PROCESSED_STATE") != "auto" else
             ("imap_keywords_available" if method == "imap_keyword" else "imap_keywords_unavailable"),
             uidvalidity=generation)
+        diagnostic_state = WorkerState()
+        try:
+            move_plan = SafeMover(connection, client, diagnostic_state.db).plan(
+                inbox, junk, os.environ.get("IMAP_MOVE_FALLBACK", "disabled")
+            )
+        finally:
+            diagnostic_state.close()
+        log("info", "imap_move_method_selected", method=move_plan.method, reason=move_plan.reason)
+        if move_plan.method == "unsupported" and not boolean("DRY_RUN"):
+            raise RuntimeError(f"safe IMAP move is unsupported: {move_plan.reason}")
         status, data = connection.status(inbox.wire_name, "(MESSAGES)")
         if status != "OK":
             raise RuntimeError("INBOX status request failed")
@@ -533,7 +545,7 @@ def run() -> int:
                 state.failure("scan_failed", error)
             finally:
                 state.close()
-            log("error", "scan_failed", error=str(error), retry_in_seconds=retry)
+            log("error", "scan_failed", error_type=type(error).__name__, retry_in_seconds=retry)
             time.sleep(retry)
             retry = min(retry * 2, retry_max)
 
@@ -554,7 +566,7 @@ def main() -> int:
             return diagnosis
         return run()
     except Exception as error:
-        log("error", "startup_diagnostic", result="fail", error=str(error))
+        log("error", "startup_diagnostic", result="fail", error_type=type(error).__name__)
         return 1
 
 

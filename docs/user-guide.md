@@ -108,6 +108,7 @@ Copy-Item docker-compose.accounts.example.yml config/docker-compose.accounts.yml
 | `CREATE_MISSING_FOLDERS` | Junkがない場合に作成するか | 実環境では`false` |
 | `DRY_RUN` | メールを変更せず判定だけ行うか | 初回は`true` |
 | `PROCESSED_STATE` | 処理済み状態の管理方式（`auto`、`imap_keyword`、`local_database`） | `auto` |
+| `IMAP_MOVE_FALLBACK` | `MOVE`非対応時の安全な移動方式（`auto`、`disabled`） | `disabled` |
 | `RETRY_INITIAL_SECONDS` | 障害時の最初の再試行待機 | `5` |
 | `RETRY_MAX_SECONDS` | 再試行待機時間の上限 | `300` |
 
@@ -123,6 +124,14 @@ Mail Sentinelは、移動先を次の順序で決定する。
 2. 指定フォルダーが存在しない場合だけ、`\Junk`属性を持つ唯一のフォルダーへフォールバックする。
 3. 指定フォルダーが存在せず、`\Junk`属性フォルダーが複数ある場合は、移動先が曖昧なため診断エラーとする。
 4. 指定フォルダーも`\Junk`属性フォルダーも存在しない場合は、Junkフォルダー不在として扱う。
+
+### 4.3 `MOVE`非対応サーバー
+
+既定値の`IMAP_MOVE_FALLBACK=disabled`では、サーバーが`MOVE`を通知しない場合にメールを移動しない。フォールバックは自動では有効にならず、利用者が`IMAP_MOVE_FALLBACK=auto`を明示した場合だけ使用される。サーバーが`MOVE`を通知する場合は、この設定に関係なく従来どおり`UID MOVE`を使用する。
+
+`auto`を明示した場合、`MOVE`がなくても`UIDPLUS`を通知し、移動元と移動先の双方がユーザー定義IMAPキーワードを保持できれば、ジャーナル付きの`UID COPY`、`\Deleted`付与、`UID EXPUNGE`を使用する。通常の`EXPUNGE`は使用しないため、同じフォルダーにある無関係な削除予定メールを削除しない。
+
+`disabled`の場合、または`auto`でも安全条件を満たさない場合の方式は`unsupported`となる。`DRY_RUN=true`では診断結果を確認できるがメールボックスを変更しない。`DRY_RUN=false`では起動診断を失敗させ、メールをINBOXへ残す。
 
 専用フォルダーを使用する場合は、メールクライアントまたはWebメールで先に作成し、表示された名前と同じ文字列を設定する。
 
@@ -303,8 +312,9 @@ docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml logs 
 
 ```json
 {"level":"info","event":"startup_diagnostic","check":"imap_connection","result":"pass"}
-{"level":"info","event":"startup_diagnostic","check":"inbox_folder","folder":"INBOX","result":"pass"}
-{"level":"info","event":"startup_diagnostic","check":"junk_folder","folder":"Junk","result":"pass"}
+{"level":"info","event":"startup_diagnostic","check":"inbox_folder","result":"pass"}
+{"level":"info","event":"startup_diagnostic","check":"junk_folder","source":"configured","result":"pass"}
+{"level":"info","event":"imap_move_method_selected","method":"copy_uid_expunge","reason":"uidplus_and_keywords_available"}
 {"level":"info","event":"startup_diagnostic","check":"spamassassin_connection","result":"pass"}
 {"level":"info","event":"startup_diagnostic_complete","result":"pass"}
 ```
@@ -322,6 +332,7 @@ docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml run -
 ドライラン中もメールの取得とSpamAssassinによる採点は行うが、次の変更は行わない。
 
 - Junkフォルダーへの移動
+- 移動フォールバックのCOPY、マーカー付与、削除フラグ付与、UID EXPUNGE
 - 正常メールへの処理済みキーワード付与
 
 ログを継続表示する。
@@ -335,7 +346,7 @@ docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml logs 
 迷惑メールのドライラン例:
 
 ```json
-{"event":"message_classified","uid":12,"classification":"spam","score":"8.4/5.0","action":"would_move","destination":"Junk","dry_run":true}
+{"event":"message_classified","uid":12,"classification":"spam","score":8.4,"threshold":5.0,"action":"would_process","move_required":true,"dry_run":true}
 ```
 
 正常メールのドライラン例:

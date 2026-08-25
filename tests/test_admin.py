@@ -27,6 +27,9 @@ class FakeMailbox:
     }
     moves = []
 
+    def __init__(self, _database=None):
+        pass
+
     def close(self):
         pass
 
@@ -77,6 +80,7 @@ class AdminJobTests(unittest.TestCase):
             "IMAP_PORT": "3143",
             "IMAP_USERNAME": "test@test.local",
             "IMAP_JUNK": "Junk",
+            "IMAP_MOVE_FALLBACK": "auto",
             "IMAP_TIMEOUT_SECONDS": "10",
             "SPAMC_MAX_SIZE_BYTES": "10485760",
         })

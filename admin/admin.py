@@ -24,6 +24,7 @@ from pathlib import Path
 
 from mail_sentinel_accounts import account_environment, configured_accounts
 from mail_sentinel_imap import CapabilityIMAP
+from mail_sentinel_move import SafeMover
 from mail_sentinel_operations import Notifier, open_operations
 from typing import Iterator
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -198,7 +199,9 @@ class State:
 
 
 class Mailbox:
-    def __init__(self):
+    def __init__(self, database: sqlite3.Connection | None = None):
+        self.database = database or sqlite3.connect(":memory:")
+        self.owns_database = database is None
         host = required_env("IMAP_HOST")
         port = int(required_env("IMAP_PORT"))
         timeout = int(required_env("IMAP_TIMEOUT_SECONDS"))
@@ -213,12 +216,16 @@ class Mailbox:
                 raise RuntimeError("IMAP_TLS_MODE must be implicit, starttls, or none")
         self.imap.login(required_env("IMAP_USERNAME"), read_secret(required_env("IMAP_PASSWORD_FILE")))
         self.client = CapabilityIMAP(self.imap)
+        self.selected_mailbox = None
+        self.selected_uidvalidity = None
 
     def close(self) -> None:
         try:
             self.imap.logout()
         except imaplib.IMAP4.error:
             pass
+        if self.owns_database:
+            self.database.close()
 
     def select(self, folder: str, readonly: bool) -> int:
         special_use = "\\junk" if folder == os.environ.get("IMAP_JUNK") else None
@@ -229,7 +236,9 @@ class Mailbox:
         response = self.imap.response("UIDVALIDITY")[1]
         if not response or not response[0]:
             raise RuntimeError("IMAP server did not report UIDVALIDITY")
-        return int(response[0])
+        self.selected_mailbox = mailbox
+        self.selected_uidvalidity = int(response[0])
+        return self.selected_uidvalidity
 
     def candidate_uids(self, since: datetime | None, before: datetime | None) -> list[int]:
         criteria: list[str] = ["ALL"]
@@ -257,16 +266,14 @@ class Mailbox:
         return data[0][1]
 
     def move(self, uid: int, destination: str) -> int | None:
-        if "MOVE" not in self.client.capabilities:
-            raise RuntimeError("IMAP server does not support MOVE")
+        if self.selected_mailbox is None or self.selected_uidvalidity is None:
+            raise RuntimeError("source mailbox is not selected")
         special_use = "\\junk" if destination == os.environ.get("IMAP_JUNK") else None
         mailbox = self.client.resolve(destination, special_use)
-        status, data = self.imap.uid("MOVE", str(uid), mailbox.wire_name)
-        if status != "OK":
-            raise RuntimeError(f"IMAP MOVE failed for UID {uid}")
-        text = b" ".join(item for item in data if isinstance(item, bytes))
-        match = re.search(rb"COPYUID\s+\d+\s+\d+\s+(\d+)", text)
-        return int(match.group(1)) if match else None
+        return SafeMover(self.imap, self.client, self.database).move(
+            self.selected_mailbox, self.selected_uidvalidity, uid, mailbox,
+            os.environ.get("IMAP_MOVE_FALLBACK", "disabled"),
+        )
 
     def find_digest(self, folder: str, digest: str) -> int | None:
         self.select(folder, readonly=True)
@@ -351,7 +358,7 @@ def preview(args: argparse.Namespace, state: State) -> None:
         raise RuntimeError("range start must be earlier than range end")
     spam = SpamAssassin()
     with folder_lock(args.folder):
-        mailbox = Mailbox()
+        mailbox = Mailbox(state.db)
         try:
             uidvalidity = mailbox.select(args.folder, readonly=True)
             candidates = candidate_metadata(mailbox, since, before, args.max_messages)
@@ -385,7 +392,7 @@ def preview(args: argparse.Namespace, state: State) -> None:
                     )
                     if classification == "spam":
                         emit("scan_candidate", uid=uid, internaldate=internaldate.isoformat(),
-                             subject=subject, sender=sender, score=score, rules=rule_names)
+                             score=score, rules=rule_names)
                 state.db.commit()
             state.db.execute("UPDATE jobs SET status='previewed', processed_count=?, finished_at=? WHERE job_id=?",
                              (len(candidates), utc_now(), job_id))
@@ -442,7 +449,7 @@ def apply_job(args: argparse.Namespace, state: State) -> None:
     if source["job_type"] == "initial_scan" and source["rule_set_id"] != spam.rule_set_id():
         raise RuntimeError("SpamAssassin rule set changed after preview; create a new preview")
     with folder_lock(source["folder"]):
-        mailbox = Mailbox()
+        mailbox = Mailbox(state.db)
         try:
             uidvalidity = mailbox.select(source["folder"], readonly=source["job_type"] == "initial_learn")
             if uidvalidity != source["uidvalidity"]:
@@ -509,7 +516,8 @@ def apply_job(args: argparse.Namespace, state: State) -> None:
                             (str(error), utc_now(), job["job_id"], uidvalidity, uid),
                         )
                         state.db.commit()
-                        emit("message_failed", job_id=job["job_id"], uid=uid, error=str(error), retryable=True)
+                        emit("message_failed", job_id=job["job_id"], uid=uid,
+                             error_type=type(error).__name__, retryable=True)
                 if limit_reached:
                     break
             if limit_reached:
@@ -675,7 +683,7 @@ def main() -> int:
     except Exception as error:
         operations.audit("admin_command", "failure", command=args.command,
                          error_type=type(error).__name__)
-        emit("admin_failed", error=str(error))
+        emit("admin_failed", error_type=type(error).__name__)
         return 1
     finally:
         operations_db.close()

@@ -11,6 +11,7 @@ Mail Sentinel Dockerは、IMAPメールボックスの新着メールをSpamAssa
 - 複数のIMAPアカウントを定期監視
 - SpamAssassinによるスパム判定
 - スパムをJunkへ移動し、正常メールはINBOXに保持
+- `MOVE`非対応環境では、対応機能を診断して安全な`UID COPY`＋`UID EXPUNGE`へ自動フォールバック
 - IMAPキーワードまたはローカルSQLiteによる処理済み管理
 - `Learn-Ham` / `Learn-Spam`フォルダーを使ったフィードバック学習
 - 既存メールの初期学習と初期スキャン
