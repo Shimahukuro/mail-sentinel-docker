@@ -19,6 +19,7 @@ COPY --chown=root:root admin/maintenance.py /usr/local/bin/mail-sentinel-mainten
 COPY --chown=root:root python/mail_sentinel_imap.py /usr/lib/python3/dist-packages/mail_sentinel_imap.py
 COPY --chown=root:root python/mail_sentinel_accounts.py /usr/lib/python3/dist-packages/mail_sentinel_accounts.py
 COPY --chown=root:root python/mail_sentinel_operations.py /usr/lib/python3/dist-packages/mail_sentinel_operations.py
+COPY --chown=root:root python/mail_sentinel_move.py /usr/lib/python3/dist-packages/mail_sentinel_move.py
 COPY --chown=root:root spamassassin/local.cf /etc/mail-sentinel/local.cf
 RUN chmod 0755 /usr/local/bin/mail-sentinel-admin /usr/local/bin/mail-sentinel-maintenance
 

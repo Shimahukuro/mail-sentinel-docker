@@ -14,6 +14,7 @@ RUN apt-get update \
 COPY --chown=root:root python/mail_sentinel_imap.py /usr/lib/python3/dist-packages/mail_sentinel_imap.py
 COPY --chown=root:root python/mail_sentinel_accounts.py /usr/lib/python3/dist-packages/mail_sentinel_accounts.py
 COPY --chown=root:root python/mail_sentinel_operations.py /usr/lib/python3/dist-packages/mail_sentinel_operations.py
+COPY --chown=root:root python/mail_sentinel_move.py /usr/lib/python3/dist-packages/mail_sentinel_move.py
 COPY --chown=root:root worker/worker.py /usr/local/bin/mail-sentinel-worker
 COPY --chown=root:root worker/supervisor.py /usr/local/bin/mail-sentinel-supervisor
 

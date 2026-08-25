@@ -54,6 +54,12 @@ docker compose logs --tail=200 worker spamassassin
 docker compose --profile tools run --rm admin --account primary audit --limit 100
 ```
 
+### IMAP移動方式
+
+起動ログの`imap_move_method_selected`を確認する。`uid_move`はサーバーの`UID MOVE`、`copy_uid_expunge`は`UIDPLUS`と一時キーワードを使う安全なフォールバック、`unsupported`は移動不可を示す。既定値は`IMAP_MOVE_FALLBACK=disabled`であり、フォールバックは`auto`を明示したアカウントだけで有効になる。`unsupported`の場合は`DRY_RUN=false`へ切り替えず、設定値とIMAPサーバーの`MOVE`、`UIDPLUS`、移動元・先の`PERMANENTFLAGS`を確認する。
+
+`copy_uid_expunge`の中断状態は永続状態DBの`move_transactions`から自動再開される。手動でJunkの一時キーワードや状態DBを削除しない。再試行後も復旧しない場合はworkerを停止してバックアップを取得し、`error_type`と方式判定理由を確認する。
+
 ## ルール更新
 
 ```sh
