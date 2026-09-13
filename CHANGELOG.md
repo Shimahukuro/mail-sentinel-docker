@@ -6,6 +6,30 @@
 
 ## [Unreleased]
 
+### 修正
+
+- `VERSION`ファイルを`0.1.1`から`0.1.3`へ更新し、リリース番号と一致させる
+
+## [0.1.3] - 2026-09-13
+
+### 依存関係の更新
+
+- ローカル統合テスト環境のRoundcubeイメージを`1.7.3-apache`から`1.7.4-apache`へ更新（#17）
+
+### バージョンアップ時の注意
+
+- 本番用worker・SpamAssassinの変更はありません。テスト環境でRoundcubeを使用している場合は、更新先イメージを取得してRoundcubeコンテナを再作成してください。
+
+## [0.1.2] - 2026-09-01
+
+### 依存関係の更新
+
+- ローカル統合テスト環境のGreenMailイメージを`2.1.12`から`2.1.13`へ更新（#16）
+
+### バージョンアップ時の注意
+
+- 本番用worker・SpamAssassinの変更はありません。テスト環境でGreenMailを使用している場合は、更新先イメージを取得してGreenMailコンテナを再作成してください。
+
 ## [0.1.1] - 2026-08-25
 
 Mail Sentinel Dockerの安全なIMAP移動方式、更新通知、導入ドキュメントを強化したメンテナンスリリースです。
@@ -81,6 +105,8 @@ Mail Sentinel Dockerの最初のPoCリリースです。既存のメール配送
 
 詳細な導入方法は[README](README.md)と[ユーザーガイド](docs/user-guide.md)を参照してください。
 
-[Unreleased]: https://github.com/Shimahukuro/mail-sentinel-docker/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/Shimahukuro/mail-sentinel-docker/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/Shimahukuro/mail-sentinel-docker/compare/v0.1.2...v0.1.3
+[0.1.2]: https://github.com/Shimahukuro/mail-sentinel-docker/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Shimahukuro/mail-sentinel-docker/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Shimahukuro/mail-sentinel-docker/releases/tag/v0.1.0
