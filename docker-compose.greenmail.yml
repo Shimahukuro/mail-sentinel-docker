@@ -21,7 +21,7 @@ services:
       - mail-sentinel
 
   roundcube:
-    image: roundcube/roundcubemail:1.7.3-apache
+    image: roundcube/roundcubemail:1.7.4-apache
     depends_on:
       greenmail:
         condition: service_healthy
