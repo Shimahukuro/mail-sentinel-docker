@@ -171,6 +171,8 @@ python3 -m unittest discover -s tests -v
 
 ## サポート・問い合わせ
 
+Issue、Pull Request、GitHub Discussions、およびそれらへのコメントは、原則として日本語で記載してください。詳細と例外は[コントリビューションガイド](CONTRIBUTING.md#使用言語)を参照してください。
+
 インストール、設定、操作方法についての質問は、[Q&Aを新規作成](https://github.com/Shimahukuro/mail-sentinel-docker/discussions/new?category=q-a)から投稿してください。リンクを開くと、GitHub DiscussionsのQ&Aカテゴリを選択した新規投稿フォームが表示されます。質問には、利用OS、Dockerのバージョン、実行したコマンド、Secretを除いたエラーメッセージを記載すると状況を確認しやすくなります。
 
 不具合報告と機能要望は[GitHub Issues](https://github.com/Shimahukuro/mail-sentinel-docker/issues)を利用してください。パスワード、アクセストークン、実際のメールアドレス、メール本文などの機密情報は、DiscussionやIssueへ投稿しないでください。
