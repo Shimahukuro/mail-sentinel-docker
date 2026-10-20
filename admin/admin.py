@@ -23,7 +23,7 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 from mail_sentinel_accounts import account_environment, configured_accounts
-from mail_sentinel_imap import CapabilityIMAP
+from mail_sentinel_imap import CapabilityIMAP, connect_imap
 from mail_sentinel_move import SafeMover
 from mail_sentinel_operations import Notifier, open_operations
 from typing import Iterator
@@ -206,14 +206,7 @@ class Mailbox:
         port = int(required_env("IMAP_PORT"))
         timeout = int(required_env("IMAP_TIMEOUT_SECONDS"))
         mode = required_env("IMAP_TLS_MODE")
-        if mode == "implicit":
-            self.imap = imaplib.IMAP4_SSL(host, port, timeout=timeout)
-        else:
-            self.imap = imaplib.IMAP4(host, port, timeout=timeout)
-            if mode == "starttls":
-                self.imap.starttls()
-            elif mode != "none":
-                raise RuntimeError("IMAP_TLS_MODE must be implicit, starttls, or none")
+        self.imap = connect_imap(host, port, mode, timeout, os.environ.get("IMAP_CA_FILE"))
         self.imap.login(required_env("IMAP_USERNAME"), read_secret(required_env("IMAP_PASSWORD_FILE")))
         self.client = CapabilityIMAP(self.imap)
         self.selected_mailbox = None

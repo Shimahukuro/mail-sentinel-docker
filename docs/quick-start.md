@@ -8,7 +8,7 @@
 
 - Gitがインストールされ、`git`コマンドを利用できる
 - Docker EngineとDocker Compose v2が利用できる
-- 対象メールサーバーでIMAPまたはIMAPSを利用できる
+- 対象メールサーバーでIMAPSまたはSTARTTLSを利用でき、証明書を検証できる（平文IMAPは隔離されたローカルテスト用）
 - IMAPユーザー名とパスワード、アプリパスワード、またはアクセストークンを用意できる
 - INBOXと迷惑メール用フォルダーを確認できる
 
@@ -79,6 +79,8 @@ Copy-Item docker-compose.accounts.example.yml config/docker-compose.accounts.yml
 ```
 
 実際には、`accounts.example.json`に含まれる他の既定値も残してください。
+
+IMAPSでは`IMAP_TLS_MODE=implicit`、STARTTLSでは`starttls`を選び、ポートはプロバイダー指定値にします。両方式とも証明書の信頼性、有効期限、`IMAP_HOST`とのホスト名一致を検証し、失敗時は認証情報を送信しません。公的CAの証明書なら通常は追加設定不要です。独自CAの場合は、[ユーザーガイドの接続設定](user-guide.md#41-アカウント設定ファイル)に従ってworkerとadminへCA証明書をマウントし、`IMAP_CA_FILE`を設定してください。
 
 ### 3.2 `docker-compose.accounts.yml`を確認する
 
@@ -184,6 +186,8 @@ docker compose \
 - 重大な誤判定がない
 
 ドライランではメールの取得と採点を行いますが、メールの移動、削除、フラグ変更は行いません。同じメールが監視のたびに再判定されるのは正常な動作です。
+
+ドライランでもTLSの検証は省略しません。`SSLCertVerificationError`などで接続できない場合は、[運用Runbookの証明書エラー対応](operations-runbook.md#imapのtls接続と証明書エラー)を確認してください。検証を無効化したり、`none`へ変更したりして本番接続を続けないでください。
 
 診断だけを手動実行する場合:
 

@@ -67,6 +67,43 @@ docker compose logs --tail=200 worker spamassassin
 docker compose --profile tools run --rm admin --account primary audit --limit 100
 ```
 
+### IMAPのTLS接続と証明書エラー
+
+workerとadminは、`IMAP_TLS_MODE=implicit`（IMAPS）と`starttls`の両方で、認証情報を送る前に証明書の信頼性、有効期限、`IMAP_HOST`とのホスト名一致を検証する。検証やSTARTTLSが失敗しても平文へ自動的に切り替えない。`none`は隔離されたローカルテスト用とする。
+
+更新後に接続できなくなった場合は、まずログの`error_type`を確認する。起動時の失敗は`startup_diagnostic`の`result=fail`に記録される。ログは例外の詳細を省くため、型だけでは証明書エラーの原因を特定できない場合がある。
+
+| 確認事項 | 対応 |
+| --- | --- |
+| `IMAP_HOST`と証明書の名前が一致するか | プロバイダー指定の接続先名を使用する。IPアドレス指定や別名では一致しない場合がある |
+| 証明書の有効期限、サーバー・Dockerホストの時刻 | 管理者へ証明書更新を依頼し、ホストの時刻を確認する |
+| 中間証明書を含む証明書チェーン | サーバー管理者へ正しいチェーンの提示を依頼する |
+| 独自CAを使用しているか | 管理者から信頼できる経路でCA証明書を入手し、`IMAP_CA_FILE`で標準CAへ追加する |
+| CAファイルのパス・PEM形式・読み取り権限 | workerとadminの両方へマウントし、コンテナのUID `10001`で読み取れることを確認する |
+| TLS方式、ポート、サーバーの対応 | プロバイダー指定の組み合わせにする。古いTLSしか使えない場合はサーバー更新を相談する |
+
+独自CAの具体的なマウント方法は[ユーザーガイドの接続設定](user-guide.md#41-アカウント設定ファイル)を参照する。サーバーの秘密鍵は配布しない。接続先から取得した証明書を確認せず信頼登録せず、証明書検証の無効化や平文接続への変更で回避しない。
+
+CA証明書を更新した場合、設定・マウントと新旧CAの切り替え時期を管理者と確認する。ファイル置換が既存のバインドマウントへ反映されない場合もあるため、診断には新しい一時コンテナを使用し、workerも再作成する。公的CA配下でのサーバー証明書更新では、信頼チェーンが維持されていれば通常は追加ファイル不要である。
+
+### TLS修正を含むアプリケーション更新
+
+以下は本リポジトリのビルド構成での手順。既存の設定とCAファイルを確認し、運用時の`DRY_RUN`設定を保ったまま診断する。`--diagnose`は監視処理を開始しない。
+
+```sh
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml build worker admin
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml run --rm worker /usr/local/bin/mail-sentinel-supervisor --diagnose
+```
+
+終了コードと各アカウントの`startup_diagnostic_complete`の`result=pass`を確認してから反映する。
+
+```sh
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml up -d --force-recreate worker
+docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml --profile tools run --rm admin --account primary health --live
+```
+
+adminの確認では出力の`live.imap`と`live.spamassassin`が`pass`であることを確認する（コマンドの終了コードだけで判断しない）。adminは実行のたびに一時コンテナを作るため、次回から再ビルドしたイメージとCAマウントを使用する。失敗時は設定・証明書を修正して再診断し、既存データのボリュームを削除しない。
+
 ### IMAP移動方式
 
 起動ログの`imap_move_method_selected`を確認する。`uid_move`はサーバーの`UID MOVE`、`copy_uid_expunge`は`UIDPLUS`と一時キーワードを使う安全なフォールバック、`unsupported`は移動不可を示す。既定値は`IMAP_MOVE_FALLBACK=disabled`であり、フォールバックは`auto`を明示したアカウントだけで有効になる。`unsupported`の場合は`DRY_RUN=false`へ切り替えず、設定値とIMAPサーバーの`MOVE`、`UIDPLUS`、移動元・先の`PERMANENTFLAGS`を確認する。
@@ -95,6 +132,7 @@ docker compose start spamassassin worker
 ```
 
 アーカイブには処理状態、Bayesデータ、SpamAssassinルール、manifest、各構成物のSHA-256が含まれる。IMAP Secretと`accounts.json`は含まれないため、別のSecret管理手順で保全する。
+`IMAP_CA_FILE`で追加したCA証明書と、そのComposeマウント設定もこのアーカイブには含まれない。復元先で同じ信頼設定を再構成できるよう別途保全する。CA証明書は公開情報だが、置き換えられないよう完全性とアクセス権を管理する。
 
 保守コンテナは制限付き所有権のファイルも保全するためrootで動作するが、通常起動されない`maintenance` profileに限定する。capabilityは所有権維持と読み書きに必要な`CHOWN`、`DAC_OVERRIDE`、`DAC_READ_SEARCH`、`FOWNER`だけを戻し、`no-new-privileges`と読み取り専用ルートファイルシステムを使用する。
 

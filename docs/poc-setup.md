@@ -52,6 +52,8 @@ chmod 600 secrets/imap_primary_password
 
 ## ビルドと起動
 
+外部IMAP接続には`IMAP_TLS_MODE=implicit`（IMAPS）または`starttls`を使用する。workerとadminは証明書の信頼性、有効期限、`IMAP_HOST`とのホスト名一致を検証し、失敗時は認証しない。公的CAでは通常追加設定不要であり、独自CAの場合だけ`IMAP_CA_FILE`と両コンテナへのCAマウントを追加する。手順は[ユーザーガイド](user-guide.md#41-アカウント設定ファイル)、接続できない場合の切り分けは[運用Runbook](operations-runbook.md#imapのtls接続と証明書エラー)を参照する。
+
 ```sh
 docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml build
 docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml up -d

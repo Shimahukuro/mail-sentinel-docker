@@ -387,6 +387,7 @@ flowchart LR
 | 分類 | 主な設定 |
 | --- | --- |
 | IMAP 接続 | ホスト名、ポート、TLS 使用、ユーザー名、認証情報 |
+| IMAP の信頼設定 | 標準CAと任意の`IMAP_CA_FILE`による独自CAの追加。TLSの証明書・ホスト名検証は常時有効 |
 | フォルダ | 監視対象、迷惑メール移動先、`Learn-Ham`、`Learn-Spam` |
 | 監視 | ポーリング間隔、一度に処理する件数、接続タイムアウト |
 | SpamAssassin | 判定閾値、言語・地域ルール、許可リスト、拒否リスト |
@@ -400,7 +401,7 @@ flowchart LR
 
 ## 7. セキュリティ
 
-- IMAP 接続には TLS を必須とし、サーバー証明書を検証する
+- 本番のIMAP接続にはIMAPSまたはSTARTTLSを使用し、サーバー証明書の信頼性、有効期限、ホスト名を検証する。明示的な`none`は隔離されたローカルテスト用に維持する
 - 可能であればアプリパスワードまたは OAuth 2.0 を使用する
 - 認証情報を Git、Docker イメージ、通常ログへ保存しない
 - `spamd` のポートは Docker 内部ネットワークだけで利用する
@@ -410,6 +411,8 @@ flowchart LR
 - コンテナイメージと SpamAssassin ルールを定期的に更新する
 
 OAuth 2.0 の要否や利用方法はメールプロバイダーごとに異なるため、対象プロバイダーを決めた後に認証方式を確定する。
+
+TLS接続は`python/mail_sentinel_imap.py`の`connect_imap()`で共通化し、workerのパスワード・アプリパスワード・XOAUTH2認証と、adminのパスワード認証の前に実行する。標準の信頼済みCAは`ssl.create_default_context()`で読み込み、`IMAP_CA_FILE`が指定された場合だけ追加CAを読み込む。CAファイルの異常、証明書検証失敗、STARTTLS失敗時は接続を中止し、認証情報の送信や平文への自動切り替えを行わない。独自CAはworkerとadminの両方へ読み取り専用でマウントする。詳細は[ユーザーガイド](user-guide.md#41-アカウント設定ファイル)を参照する。
 
 ## 8. 障害時の振る舞い
 
@@ -616,7 +619,7 @@ initial_jobs:
 | 永続領域 | 状態DBとBayesデータを読み書きできる | 起動を停止する |
 | 学習機能 | `sa-learn`が利用でき、Bayes状態を取得できる | 学習機能を異常として通知する |
 
-自動検証の設定例を次に示す。
+以下の`startup_validation`は設計上の設定例であり、現在の`accounts.json`で受け付ける専用設定ではない。現在のTLS方式は`IMAP_TLS_MODE`で選び、TLS使用時の証明書検証は無効化できない。独自CAには`IMAP_CA_FILE`を使用する。
 
 ```yaml
 startup_validation:
@@ -629,7 +632,7 @@ startup_validation:
   test_persistent_storage: true
 ```
 
-起動結果は、項目ごとに`pass`、`fallback`、`fail`で記録する。
+以下は設計上の表示例。現行の起動ログはJSON形式で、TLS検証の成功はIMAP接続成功に含まれ、独立した`TLS certificate verification`行は出力しない。TLS失敗時は`startup_diagnostic`の`result=fail`と`error_type`を記録する。
 
 ```text
 PASS     TLS certificate verification

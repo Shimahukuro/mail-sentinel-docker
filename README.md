@@ -76,6 +76,8 @@ Copy-Item docker-compose.accounts.example.yml config/docker-compose.accounts.yml
 
 実際には、コピーしたファイルの`defaults`も残してください。初回確認が終わるまでは`DRY_RUN`を`true`にします。
 
+IMAPSとSTARTTLSではサーバー証明書とホスト名を検証します。公的CAの証明書なら通常は追加設定不要です。独自CAを使用する場合の`IMAP_CA_FILE`とマウント方法は[ユーザーガイド](docs/user-guide.md#41-アカウント設定ファイル)、更新後の接続エラー対応は[運用Runbook](docs/operations-runbook.md#imapのtls接続と証明書エラー)を参照してください。
+
 `IMAP_JUNK`と完全一致するフォルダーが優先されます。存在しない場合だけ、IMAPサーバーが通知する唯一の`\Junk` Special-Useフォルダーへフォールバックします。詳細は[ユーザーガイド](docs/user-guide.md#42-junkフォルダーの指定とjunk属性)を参照してください。
 
 ### 2. IMAPパスワードを保存する
@@ -162,6 +164,7 @@ docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml resta
 ## テスト
 
 Pythonの単体テストは標準ライブラリの`unittest`で実行できます。
+TLS接続テストには`openssl`コマンドとループバック通信が必要です。テスト用の証明書を一時生成し、外部サーバーや実際の認証情報は使用しません。
 
 ```sh
 python3 -m unittest discover -s tests -v

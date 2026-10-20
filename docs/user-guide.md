@@ -94,6 +94,7 @@ Copy-Item docker-compose.accounts.example.yml config/docker-compose.accounts.yml
 | `IMAP_HOST` | IMAPサーバー名 | プロバイダー指定値 |
 | `IMAP_PORT` | IMAPポート | IMAPSでは`993` |
 | `IMAP_TLS_MODE` | `implicit`、`starttls`、`none` | 実環境では`implicit` |
+| `IMAP_CA_FILE` | 独自CAのPEM証明書ファイル。標準の信頼済みCAへ追加する | 通常は未設定 |
 | `IMAP_USERNAME` | IMAPログイン名 | 対象アカウント |
 | `IMAP_INBOX` | 監視フォルダー | `INBOX` |
 | `IMAP_JUNK` | 迷惑メール移動先。大文字・小文字を含む完全なフォルダー名 | 実際のフォルダー名 |
@@ -113,6 +114,24 @@ Copy-Item docker-compose.accounts.example.yml config/docker-compose.accounts.yml
 | `RETRY_MAX_SECONDS` | 再試行待機時間の上限 | `300` |
 
 共通値はトップレベルの`defaults`へ、アカウント固有値は各`environment`へ記述する。`IMAP_TLS_MODE=none`は、GreenMailなどローカルの隔離されたテスト環境だけで使用する。
+
+`implicit`と`starttls`では、workerとadminの両方がサーバー証明書の信頼性、有効期限、`IMAP_HOST`とのホスト名一致を検証する。検証失敗やSTARTTLS失敗時は認証情報を送らず、平文へ自動的に切り替えない。公的CAの証明書を使う通常のサーバーでは、追加設定は不要である。
+
+独自CAを使う場合は、サーバー管理者から信頼できる経路で入手したCA証明書（PEM形式）をworkerとadminへ読み取り専用でマウントする。例えば、アカウント用Compose上書きファイルの既存の`services`設定へ次を追加する。
+
+```yaml
+services:
+  worker:
+    volumes:
+      - ./config/imap-ca.pem:/etc/mail-sentinel/imap-ca.pem:ro
+  admin:
+    volumes:
+      - ./config/imap-ca.pem:/etc/mail-sentinel/imap-ca.pem:ro
+```
+
+対象アカウントの`environment`へ`"IMAP_CA_FILE": "/etc/mail-sentinel/imap-ca.pem"`を追加する。証明書はコンテナのUID `10001`で読み取れるようにし、秘密鍵は渡さない。自己署名証明書を信頼する場合も、管理者に指紋を別経路で確認する。接続先が提示した証明書を確認せず信頼登録しない。
+
+指定したCAファイルが存在しない、読み取れない、または不正な場合は接続を中止する。CAを追加しても有効期限とホスト名の検証は維持する。期限切れや名前の不一致はサーバー側の修正、またはプロバイダー指定の正しい`IMAP_HOST`への変更で対応し、検証は無効化しない。
 
 ### 4.2 Junkフォルダーの指定と`\Junk`属性
 
@@ -542,6 +561,12 @@ docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml logs 
 ```console
 docker compose -f docker-compose.yml -f config/docker-compose.accounts.yml run --rm worker /usr/local/bin/mail-sentinel-supervisor --diagnose
 ```
+
+### 証明書エラーでIMAPへ接続できない
+
+`SSLCertVerificationError`の場合は、接続先名、有効期限、ホストの時刻、サーバーの証明書チェーンを確認する。独自CAの場合は`IMAP_CA_FILE`とworker・admin両方のマウントを確認する。ファイルの欠落、読み取り権限、PEM形式の不備でも認証前に停止する。具体的な切り分けと更新後の診断手順は[運用Runbook](operations-runbook.md#imapのtls接続と証明書エラー)を参照する。
+
+TLS検証はドライラン・起動前診断・通常監視・管理CLIで共通である。検証の無効化や`IMAP_TLS_MODE=none`への変更で本番接続を続けない。
 
 ### Junkフォルダーが存在しない
 

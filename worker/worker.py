@@ -19,7 +19,7 @@ from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from mail_sentinel_imap import CapabilityIMAP, MailboxInfo
+from mail_sentinel_imap import CapabilityIMAP, MailboxInfo, connect_imap
 from mail_sentinel_move import SafeMover
 from mail_sentinel_operations import Notifier, OperationsState
 
@@ -252,14 +252,7 @@ def authenticate(connection: imaplib.IMAP4) -> None:
 def connect() -> tuple[imaplib.IMAP4, CapabilityIMAP]:
     host, port, mode = required("IMAP_HOST"), int(required("IMAP_PORT")), required("IMAP_TLS_MODE")
     timeout = positive("IMAP_TIMEOUT_SECONDS")
-    if mode == "implicit":
-        connection = imaplib.IMAP4_SSL(host, port, timeout=timeout)
-    else:
-        connection = imaplib.IMAP4(host, port, timeout=timeout)
-        if mode == "starttls":
-            connection.starttls()
-        elif mode != "none":
-            raise RuntimeError("IMAP_TLS_MODE must be implicit, starttls, or none")
+    connection = connect_imap(host, port, mode, timeout, os.environ.get("IMAP_CA_FILE"))
     authenticate(connection)
     return connection, CapabilityIMAP(connection)
 
