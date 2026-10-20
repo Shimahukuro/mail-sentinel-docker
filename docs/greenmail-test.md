@@ -152,6 +152,14 @@ docker compose -f docker-compose.yml -f docker-compose.greenmail.yml --profile t
 python3 -m unittest -v tests/test_admin.py tests/test_imap_compat.py
 ```
 
+IMAPS・STARTTLSの検証は、GreenMailの平文テストとは別に、次のTLS回帰テストで行う。Pythonに加えて`openssl`コマンドとループバック通信が必要になる。証明書とテスト用認証情報を一時生成し、外部接続や実メールは使用しない。
+
+```sh
+python3 -m unittest discover -s tests -p test_imap_tls.py -v
+```
+
+workerとadminの両方で、未信頼・期限切れ・ホスト名不一致の証明書を認証前に拒否し、独自CAを信頼した正しい証明書では接続できることを確認する。STARTTLS拒否時の停止、workerのXOAUTH2、CAファイルの異常、標準CAの利用、明示的な`none`の維持も対象とする。全回帰テストは`python3 -m unittest discover -s tests -v`で実行する。
+
 テスト後にworkerを再開する。
 
 ```sh

@@ -5,7 +5,38 @@ from __future__ import annotations
 import base64
 import imaplib
 import re
+import ssl
 from dataclasses import dataclass
+
+
+def connect_imap(host: str, port: int, mode: str, timeout: int,
+                 ca_file: str | None = None) -> imaplib.IMAP4:
+    """Establish transport, authenticating the TLS peer before caller login."""
+    if mode not in ("implicit", "starttls", "none"):
+        raise RuntimeError("IMAP_TLS_MODE must be implicit, starttls, or none")
+    if timeout < 1:
+        raise RuntimeError("IMAP_TIMEOUT_SECONDS must be positive")
+    if mode == "none":
+        return imaplib.IMAP4(host, port, timeout=timeout)
+
+    context = ssl.create_default_context()
+    if ca_file:
+        # Supplement system roots without disabling chain or hostname checks.
+        context.load_verify_locations(cafile=ca_file)
+    if mode == "implicit":
+        return imaplib.IMAP4_SSL(host, port, ssl_context=context, timeout=timeout)
+
+    connection = imaplib.IMAP4(host, port, timeout=timeout)
+    try:
+        connection.starttls(ssl_context=context)
+    except Exception:
+        # Do not leave a plaintext socket open after an unsuccessful upgrade.
+        try:
+            connection.shutdown()
+        except OSError:
+            pass
+        raise
+    return connection
 
 
 def encode_modified_utf7(value: str) -> bytes:
