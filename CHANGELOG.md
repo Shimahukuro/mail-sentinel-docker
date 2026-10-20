@@ -6,21 +6,47 @@
 
 ## [Unreleased]
 
+今後の変更はここに記録します。
+
+## [0.1.5] - 2026-10-20
+
+IMAP接続の証明書検証と、導入・更新時の確認手順を整備したメンテナンスリリースです。
+
 ### 修正
 
-- `VERSION`ファイルを`0.1.1`から`0.1.3`へ更新し、リリース番号と一致させる
-- workerとadminのIMAP接続を共通化し、IMAPS・STARTTLSでサーバー証明書の信頼性、有効期限、ホスト名を検証する。検証やSTARTTLSに失敗した場合は認証前に停止する
+- workerとadminのIMAP接続を共通化し、IMAPS・STARTTLSの両方でサーバー証明書の信頼性、有効期限、接続先ホスト名を検証（#21）
+- TLS検証やSTARTTLSに失敗した場合は、認証情報を送信せず接続を中止。平文への自動切り替えは行わない
 
 ### 追加
 
 - 標準の信頼済みCAへ独自CAのPEM証明書を追加する任意設定`IMAP_CA_FILE`
-- worker・adminの両方を対象に、不正証明書の拒否、独自CA、STARTTLS失敗時の停止、明示的な平文テスト接続を確認するTLS回帰テスト
+- worker・adminのTLS回帰テスト。未信頼・期限切れ・ホスト名不一致の証明書、独自CA、STARTTLS拒否、XOAUTH2、CA設定異常、明示的な平文テスト接続を確認
+
+### ドキュメント
+
+- クイックスタート、ユーザーガイド、運用Runbookに証明書検証、独自CAの設定、接続エラーの切り分け、更新・再診断手順を追記
+- README、PoC手順、設計書、テスト手順を実装と整合
 
 ### バージョンアップ時の注意
 
-- workerとadminのイメージを再ビルドし、起動前診断で接続を確認してください。これまで接続できていたサーバーでも、証明書の不備がある場合は接続を拒否します。
-- 公的CAの証明書を使用する場合、通常は設定追加不要です。独自CAを使用する場合は、正しいCA証明書を両コンテナへ読み取り専用でマウントし、対象アカウントへ`IMAP_CA_FILE`を設定してください。
-- 証明書の期限切れ、ホスト名不一致、チェーン不備はサーバー設定や接続先を修正してください。平文接続への変更で回避しないでください。詳細は[運用Runbook](docs/operations-runbook.md#imapのtls接続と証明書エラー)を参照してください。
+- workerとadminのイメージを再ビルドし、通常運用と同じCompose上書きファイルを指定して起動前診断を実行してください。既存のサーバーでも証明書に不備がある場合は接続を拒否します。
+- IMAPS／993番を使用するアカウントは`IMAP_TLS_MODE=implicit`のまま利用できます。今回の修正を適用するためにSTARTTLSへ変更する必要はありません。
+- 公的CAの正常な証明書を使用する場合、通常は設定追加不要です。独自CAを使用する場合は、正しいCA証明書をworkerとadminへ読み取り専用でマウントし、対象アカウントへ`IMAP_CA_FILE`を設定してください。
+- 証明書の期限切れ、ホスト名不一致、チェーン不備はサーバー設定や接続先を修正してください。検証の無効化や平文接続への変更で回避しないでください。詳細は[運用Runbook](docs/operations-runbook.md#imapのtls接続と証明書エラー)を参照してください。
+
+## [0.1.4] - 2026-09-29
+
+### 依存関係の更新
+
+- ローカル統合テスト環境のGreenMailイメージを`2.1.13`から`2.1.14`へ更新（#19）
+
+### ドキュメント
+
+- コントリビューションガイドに公開コミュニケーションを原則として日本語で記載する方針を追加
+
+### バージョンアップ時の注意
+
+- 本番用worker・SpamAssassinの変更はありません。テスト環境でGreenMailを使用している場合は、更新先イメージを取得してGreenMailコンテナを再作成してください。
 
 ## [0.1.3] - 2026-09-13
 
@@ -117,7 +143,9 @@ Mail Sentinel Dockerの最初のPoCリリースです。既存のメール配送
 
 詳細な導入方法は[README](README.md)と[ユーザーガイド](docs/user-guide.md)を参照してください。
 
-[Unreleased]: https://github.com/Shimahukuro/mail-sentinel-docker/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/Shimahukuro/mail-sentinel-docker/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/Shimahukuro/mail-sentinel-docker/compare/v0.1.4...v0.1.5
+[0.1.4]: https://github.com/Shimahukuro/mail-sentinel-docker/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/Shimahukuro/mail-sentinel-docker/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Shimahukuro/mail-sentinel-docker/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Shimahukuro/mail-sentinel-docker/compare/v0.1.0...v0.1.1
