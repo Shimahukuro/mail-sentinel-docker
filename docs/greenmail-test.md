@@ -39,6 +39,24 @@ GreenMail用設定では統合テストのため`DRY_RUN=false`を明示して�
 
 Roundcubeはこのローカルテスト環境専用であり、HTTPポートは`127.0.0.1`だけに公開する。外部ネットワークや本番環境へ公開しない。
 
+### RoundcubeとPHPの更新確認
+
+Roundcubeのバージョンと内蔵PHPのバージョンは別に確認する。定義更新後、既存のテスト環境では次のコマンドでイメージを取得し、Roundcubeを再作成する。
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.greenmail.yml pull roundcube
+docker compose -f docker-compose.yml -f docker-compose.greenmail.yml up -d --no-deps --force-recreate roundcube
+docker compose -f docker-compose.yml -f docker-compose.greenmail.yml exec roundcube php -v
+docker compose -f docker-compose.yml -f docker-compose.greenmail.yml exec roundcube apache2ctl -M
+docker compose -f docker-compose.yml -f docker-compose.greenmail.yml port roundcube 80
+```
+
+この再作成手順はGreenMailが起動済みの環境を対象とする。初回は上記の通常起動手順を使う。
+
+2026年10月22日、`1.7.5-apache`のarm64イメージ（ダイジェスト`sha256:734d9162c5225f4dcd744948ef915373afae6cece69bc1768b544615123ddc05`）でRoundcube 1.7.5、PHP 8.4.27、`php_module`を確認した。PHP 8.4.27は[CVE-2026-109618 / CVE-2026-109619の修正版](https://www.php.net/index.php)である。タグの内容は再ビルドで変わり得るため、別の取得時点・CPUアーキテクチャでも実際のPHPバージョンと配布元の修正状況を確認する。
+
+再作成後はポートが`127.0.0.1:8081`のままであることと、Roundcubeへのログイン、メール表示・送受信を確認する。
+
 ## テストメールの投入
 
 正常メールとSpamAssassin公式のGTUBEメールをfixtureとして用意している。`curl`がSMTPに対応している環境では次のように投入できる。

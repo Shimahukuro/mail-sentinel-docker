@@ -8,6 +8,13 @@
 
 今後の変更はここに記録します。
 
+## [0.1.7] - 2026-10-22
+
+### セキュリティ
+
+- テスト用Roundcubeを`1.7.4-apache`から`1.7.5-apache`へ更新（#22）。取得したarm64イメージで、CVE-2026-109618 / CVE-2026-109619の修正版であるPHP 8.4.27を確認
+- 既存のテスト環境ではRoundcubeイメージをpullし、コンテナを再作成する。通常運用のworker・spamassassinには影響しない
+
 ## [0.1.6] - 2026-10-22
 
 サイズ超過メールによる検査停滞を防ぎ、未検査メールの手動対応を支援するメンテナンスリリースです（#23）。
@@ -173,7 +180,9 @@ Mail Sentinel Dockerの最初のPoCリリースです。既存のメール配送
 
 詳細な導入方法は[README](README.md)と[ユーザーガイド](docs/user-guide.md)を参照してください。
 
-[Unreleased]: https://github.com/Shimahukuro/mail-sentinel-docker/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/Shimahukuro/mail-sentinel-docker/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/Shimahukuro/mail-sentinel-docker/compare/v0.1.6...v0.1.7
+[0.1.6]: https://github.com/Shimahukuro/mail-sentinel-docker/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/Shimahukuro/mail-sentinel-docker/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/Shimahukuro/mail-sentinel-docker/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/Shimahukuro/mail-sentinel-docker/compare/v0.1.2...v0.1.3
