@@ -19,6 +19,20 @@ docker compose --profile tools run --rm admin --account primary incidents
 
 外部接続を含む確認には`health --live`を使用する。出力にはメール本文、件名、送信者、完全なアカウント名を含めない。
 
+`primary`は設定例のアカウント名である。`--account`には実際の`config/accounts.json`の`name`を指定する。認証Secretを追加Composeファイルで定義している場合は、admin実行時も冒頭の`-f`指定を付ける。省略すると、`health --live`が認証ファイルを参照できず`FileNotFoundError`になる。
+
+### 状態DBを開けない場合
+
+`sqlite3.OperationalError: unable to open database file`の場合は、状態ボリューム内の`accounts`ディレクトリ、アカウント別ディレクトリ、DBの所有者と書き込み権限を確認する。標準のworkerとadminの実行UID/GIDは`10001:10001`である。過去のroot実行などでroot所有になっていた場合は、標準構成を使用していることを確認したうえで所有者を修復する。
+
+```sh
+docker compose --profile tools run --rm --no-deps --user 0:0 \
+  --cap-add CHOWN --cap-add DAC_OVERRIDE --entrypoint chown admin \
+  -R 10001:10001 /var/lib/mail-sentinel-state/accounts
+```
+
+この操作は状態ファイルの所有者だけを修正する。DB削除や全ユーザーへの書き込み許可で回避しない。UID/GIDを独自設定している環境では、その実行ユーザーに合わせる。
+
 Mail Sentinelの利用バージョンは、worker起動時の`application_started`および`worker_started`ログの`version`で確認できる。永続状態の`mail_sentinel_version`と`runtime_version_recorded`監査イベントにも記録されるため、障害調査では次の出力を採取する。
 
 ```sh
