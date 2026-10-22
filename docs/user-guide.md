@@ -105,6 +105,7 @@ Copy-Item docker-compose.accounts.example.yml config/docker-compose.accounts.yml
 | `LEARNING_BATCH_SIZE` | 種別ごとの1回の最大学習件数 | `25` |
 | `POLL_INTERVAL_SECONDS` | 確認間隔 | `60` |
 | `BATCH_SIZE` | 1回の最大処理件数 | `25` |
+| `IMAP_MANUAL_REVIEW` | INBOXのサイズ超過・未検査メールを移動する手動確認フォルダー。未指定・空文字列なら元フォルダーで保留 | 未指定 |
 | `LOOKBACK_DAYS` | 通常監視の対象日数 | `1` |
 | `CREATE_MISSING_FOLDERS` | Junkがない場合に作成するか | 実環境では`false` |
 | `DRY_RUN` | メールを変更せず判定だけ行うか | 初回は`true` |
@@ -593,7 +594,25 @@ TLS検証はドライラン・起動前診断・通常監視・管理CLIで共�
 
 ### メールが`message_too_large`で保留される
 
-メールサイズが`SPAMC_MAX_SIZE_BYTES`を超えている。上限を変更する場合は、コンテナのメモリ使用量と処理時間への影響を確認する。保留中のメールは移動も処理済みキーワード付与も行わない。
+メールサイズが`SPAMC_MAX_SIZE_BYTES`を超えている。既定の設定例は10,485,760バイト（10 MiB）で、上限ちょうどのメールは検査対象となる。workerは`RFC822.SIZE`を先に取得し、上限超過なら本文を取得せず、未検査として扱う。
+
+INBOXのサイズ超過メールを手動確認用フォルダーへ移す場合は、`config/accounts.json`の`defaults`または対象アカウントの`environment`に次を設定する。
+
+```json
+"IMAP_MANUAL_REVIEW": "INBOX.ManualReview"
+```
+
+フォルダー名はサーバーの階層区切りに合わせる。INBOX、Junk、学習用フォルダーとは別の名前にする。存在しない場合は`CREATE_MISSING_FOLDERS=true`で既存のフォルダー作成処理を利用できる。作成・移動権限がなければメールを元フォルダーに残して再試行する。移動には迷惑メールと同じ安全な移動方式を使い、`IMAP_MOVE_FALLBACK`の制限も適用される。DRY_RUNでは作成・移動せず、移動予定だけをログへ記録する。
+
+このフォルダーに移す理由はサイズ超過のみである。スパム判定は行っておらず、処理済みフラグも付与しない。通信や採点の一時エラーは元フォルダーで待機して再試行する。学習フォルダーのサイズ超過メールも未学習のまま元フォルダーに残し、後続の学習を進める。
+
+`IMAP_MANUAL_REVIEW`が未指定または空文字列の場合、サイズ超過メールはINBOXに残す。同じ検査上限では本文を毎回取得せず、後続メールを処理する。後から移動先を設定した場合や検査上限を変更した場合は、検索対象期間内の保留メールも再評価する。既に手動確認フォルダーへ移したメールは、手動確認するか、上限変更後にINBOXへ戻して検査する。
+
+ログの`message_uninspected`には`reason=message_too_large`、`uid`、`folder`、`size_bytes`、`size_limit_bytes`、`destination`、`action`を記録する。`action`は`moved`（移動済み）、`retained_unconfigured`（移動先未設定）、`move_failed`（移動失敗）、`would_move`（DRY_RUN）、`retained_learning_source`（学習フォルダーで保留）。本文・件名・送信者は記録しない。通常スキャンの`scan_complete.oversized`は、その回で確認したサイズ超過件数を表す。
+
+失敗状態と巡回位置はアカウント別SQLiteに保存し、再起動後も利用する。通信・採点・移動失敗の再試行間隔は`RETRY_INITIAL_SECONDS`から倍増し、`RETRY_MAX_SECONDS`を上限とする。再試行対象があっても後続メールへ順番を回す。DRY_RUNと本運用の状態は分離する。UIDVALIDITYが変わった状態や、削除・検索期間外などで候補から外れたメールの保留情報は次回の対象選択時に削除する。
+
+上限を変更する場合は、コンテナのメモリ使用量と処理時間への影響を確認する。更新時には状態DBをバックアップする。既存の処理済み記録を残して追加テーブルを作成するため移行操作は不要だが、旧版へ戻すとサイズ超過による停滞も再発し得る。
 
 ### SpamAssassinルール更新に失敗する
 

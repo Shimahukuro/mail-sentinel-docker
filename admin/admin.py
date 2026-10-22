@@ -666,21 +666,33 @@ def main() -> int:
     os.environ.clear()
     os.environ.update(environment)
     state_dir = Path(os.environ.get("STATE_DIR", "/var/lib/mail-sentinel-state"))
-    state = State(state_dir / "state.sqlite3")
-    operations_db, operations = open_operations(state_dir)
-    args.operations = operations
+    state = None
+    operations_db = None
+    operations = None
     try:
+        state = State(state_dir / "state.sqlite3")
+        operations_db, operations = open_operations(state_dir)
+        args.operations = operations
         args.handler(args, state)
         operations.audit("admin_command", "success", command=args.command)
         return 0
     except Exception as error:
-        operations.audit("admin_command", "failure", command=args.command,
-                         error_type=type(error).__name__)
-        emit("admin_failed", error_type=type(error).__name__)
+        if operations is not None:
+            operations.audit("admin_command", "failure", command=args.command,
+                             error_type=type(error).__name__)
+        if state is None or operations is None:
+            emit("admin_failed", error_type=type(error).__name__,
+                 stage="state_initialization", state_dir=str(state_dir),
+                 hint="Check state volume ownership and writability for the runtime UID/GID",
+                 uid=os.getuid(), gid=os.getgid())
+        else:
+            emit("admin_failed", error_type=type(error).__name__)
         return 1
     finally:
-        operations_db.close()
-        state.close()
+        if operations_db is not None:
+            operations_db.close()
+        if state is not None:
+            state.close()
 
 
 if __name__ == "__main__":

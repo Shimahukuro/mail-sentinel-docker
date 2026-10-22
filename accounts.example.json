@@ -4,6 +4,7 @@
     "IMAP_TLS_MODE": "implicit",
     "IMAP_AUTH_METHOD": "password",
     "IMAP_INBOX": "INBOX",
+    "IMAP_MANUAL_REVIEW": "",
     "LEARNING_ENABLED": false,
     "IMAP_LEARN_HAM": "Learn-Ham",
     "IMAP_LEARN_SPAM": "Learn-Spam",

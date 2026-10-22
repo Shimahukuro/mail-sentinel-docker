@@ -1,6 +1,7 @@
 import argparse
 import importlib.util
 import os
+import sqlite3
 import tempfile
 import unittest
 import sys
@@ -241,6 +242,30 @@ class AdminJobTests(unittest.TestCase):
             ("SEARCH", None, "ALL", "SINCE", "23-Jun-2026", "BEFORE", "19-Aug-2026"),
             mailbox.imap.arguments,
         )
+
+
+class AdminStartupTests(unittest.TestCase):
+    def test_database_open_failure_is_reported_without_traceback(self):
+        with patch.object(sys, "argv", ["admin", "--account", "test", "health"]), \
+                patch.object(admin, "configured_accounts", return_value=[("test", "abc", {})]), \
+                patch.object(admin, "account_environment", return_value={"STATE_DIR": "/state/accounts/abc"}), \
+                patch.dict(os.environ, {}, clear=True), \
+                patch.object(admin, "State", side_effect=sqlite3.OperationalError("cannot open")), \
+                patch.object(admin, "emit") as emit:
+            self.assertEqual(admin.main(), 1)
+            self.assertEqual(emit.call_args.kwargs["stage"], "state_initialization")
+            self.assertEqual(emit.call_args.kwargs["error_type"], "OperationalError")
+
+    def test_operations_open_failure_closes_job_database(self):
+        with patch.object(sys, "argv", ["admin", "--account", "test", "health"]), \
+                patch.object(admin, "configured_accounts", return_value=[("test", "abc", {})]), \
+                patch.object(admin, "account_environment", return_value={"STATE_DIR": "/state/accounts/abc"}), \
+                patch.dict(os.environ, {}, clear=True), \
+                patch.object(admin, "State") as state, \
+                patch.object(admin, "open_operations", side_effect=sqlite3.OperationalError("cannot open")), \
+                patch.object(admin, "emit"):
+            self.assertEqual(admin.main(), 1)
+            state.return_value.close.assert_called_once()
 
 
 if __name__ == "__main__":

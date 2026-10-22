@@ -43,6 +43,18 @@ CREATE TABLE IF NOT EXISTS learning_messages (
   updated_at TEXT NOT NULL,
   PRIMARY KEY(folder, uidvalidity, uid, learn_type)
 );
+CREATE TABLE IF NOT EXISTS deferred_messages (
+  task TEXT NOT NULL, folder TEXT NOT NULL, uidvalidity INTEGER NOT NULL,
+  uid INTEGER NOT NULL, reason TEXT NOT NULL, size INTEGER,
+  size_limit INTEGER NOT NULL, destination TEXT NOT NULL,
+  attempts INTEGER NOT NULL, retry_at REAL NOT NULL,
+  PRIMARY KEY(task, folder, uidvalidity, uid)
+);
+CREATE TABLE IF NOT EXISTS scan_cursors (
+  task TEXT NOT NULL, folder TEXT NOT NULL, uidvalidity INTEGER NOT NULL,
+  uid INTEGER NOT NULL,
+  PRIMARY KEY(task, folder, uidvalidity)
+);
 """
 
 VERSION_FILE = Path(os.environ.get("MAIL_SENTINEL_VERSION_FILE", "/usr/share/mail-sentinel/VERSION"))
@@ -92,6 +104,74 @@ class WorkerState:
 
     def close(self) -> None:
         self.db.close()
+
+    def batch(self, task: str, folder: str, generation: int,
+              candidates: list[int], limit: int) -> list[int]:
+        # Dry-run scheduling must never suppress a later production scan.
+        task = scheduling_task(task)
+        for table in ("deferred_messages", "scan_cursors"):
+            self.db.execute(f"DELETE FROM {table} WHERE task=? AND folder=? AND uidvalidity!=?",
+                            (task, folder, generation))
+        rows = self.db.execute(
+            "SELECT * FROM deferred_messages WHERE task=? AND folder=? AND uidvalidity=?",
+            (task, folder, generation),
+        ).fetchall()
+        present = set(candidates)
+        blocked = set()
+        now = time.time()
+        for row in rows:
+            if row["uid"] not in present:
+                self.db.execute(
+                    "DELETE FROM deferred_messages WHERE task=? AND folder=? AND uidvalidity=? AND uid=?",
+                    (task, folder, generation, row["uid"]),
+                )
+            elif (row["size_limit"] == positive("SPAMC_MAX_SIZE_BYTES")
+                  and row["destination"] == manual_review_name()
+                  and (row["retry_at"] > now or
+                       (row["reason"] == "message_too_large" and not row["destination"]))):
+                blocked.add(row["uid"])
+        cursor = self.db.execute(
+            "SELECT uid FROM scan_cursors WHERE task=? AND folder=? AND uidvalidity=?",
+            (task, folder, generation),
+        ).fetchone()
+        last = int(cursor[0]) if cursor else 0
+        eligible = sorted(present - blocked)
+        ordered = [uid for uid in eligible if uid > last] + [uid for uid in eligible if uid <= last]
+        self.db.commit()
+        return ordered[:limit]
+
+    def advance(self, task: str, folder: str, generation: int, uid: int) -> None:
+        self.db.execute("INSERT OR REPLACE INTO scan_cursors VALUES (?,?,?,?)",
+                        (scheduling_task(task), folder, generation, uid))
+        self.db.commit()
+
+    def clear_deferred(self, task: str, folder: str, generation: int, uid: int) -> None:
+        self.db.execute(
+            "DELETE FROM deferred_messages WHERE task=? AND folder=? AND uidvalidity=? AND uid=?",
+            (scheduling_task(task), folder, generation, uid),
+        )
+        self.db.commit()
+
+    def defer(self, task: str, folder: str, generation: int, uid: int, error: Exception) -> None:
+        task = scheduling_task(task)
+        previous = self.db.execute(
+            "SELECT attempts FROM deferred_messages WHERE task=? AND folder=? AND uidvalidity=? AND uid=?",
+            (task, folder, generation, uid),
+        ).fetchone()
+        attempts = min(int(previous[0]) + 1, 30) if previous else 1
+        initial = int(os.environ.get("RETRY_INITIAL_SECONDS", "5"))
+        maximum = int(os.environ.get("RETRY_MAX_SECONDS", "300"))
+        if initial < 1 or maximum < initial:
+            raise RuntimeError("invalid message retry interval")
+        delay = min(initial * 2 ** (attempts - 1), maximum)
+        self.db.execute(
+            "INSERT OR REPLACE INTO deferred_messages VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (task, folder, generation, uid,
+             "message_too_large" if isinstance(error, MessageTooLarge) else type(error).__name__,
+             error.size if isinstance(error, MessageTooLarge) else None,
+             positive("SPAMC_MAX_SIZE_BYTES"), manual_review_name(), attempts, time.time() + delay),
+        )
+        self.db.commit()
 
     def record_runtime_version(self, version: str) -> None:
         self.operations.set_status("mail_sentinel_version", version)
@@ -294,14 +374,113 @@ def search(connection: imaplib.IMAP4, *criteria: str) -> list[int]:
     return [int(value) for value in (data[0] or b"").split()]
 
 
+class MessageTooLarge(RuntimeError):
+    def __init__(self, size: int) -> None:
+        super().__init__("message_too_large")
+        self.size = size
+
+
+def manual_review_name() -> str:
+    return os.environ.get("IMAP_MANUAL_REVIEW", "").strip()
+
+
+def validate_manual_review() -> None:
+    name = manual_review_name()
+    if name and name.casefold() in {
+        os.environ.get(key, "").casefold()
+        for key in ("IMAP_INBOX", "IMAP_JUNK", "IMAP_LEARN_HAM", "IMAP_LEARN_SPAM")
+    }:
+        raise RuntimeError("manual review folder must differ from processing folders")
+
+
+def scheduling_task(task: str) -> str:
+    return task + (":dry_run" if boolean("DRY_RUN") else ":live")
+
+
+def fetch_records(data) -> list[tuple[bytes, list[bytes]]]:
+    """Keep trailing attributes after a literal attached to their FETCH record."""
+    records = []
+    metadata = b""
+    literals = []
+    for item in data or []:
+        header = item[0] if isinstance(item, tuple) and len(item) == 2 else item
+        if not isinstance(header, bytes):
+            raise RuntimeError("invalid IMAP FETCH response")
+        if re.match(rb"\d+\s+\(", header) and metadata:
+            records.append((metadata, literals))
+            metadata, literals = b"", []
+        metadata += b" " + header
+        if isinstance(item, tuple):
+            if not isinstance(item[1], bytes):
+                raise RuntimeError("invalid IMAP FETCH literal")
+            literals.append(item[1])
+    if metadata:
+        records.append((metadata, literals))
+    return records
+
+
 def fetch_message(connection: imaplib.IMAP4, uid: int) -> bytes:
-    status, data = connection.uid("FETCH", str(uid), "(UID RFC822.SIZE BODY.PEEK[])")
-    if status != "OK" or not data or not isinstance(data[0], tuple):
+    maximum = positive("SPAMC_MAX_SIZE_BYTES")
+    status, data = connection.uid("FETCH", str(uid), "(UID RFC822.SIZE)")
+    sizes = []
+    for item, literals in fetch_records(data):
+        identity = re.search(rb"\bUID\s+(\d+)\b", item, re.IGNORECASE)
+        size = re.search(rb"\bRFC822\.SIZE\s+(\d+)\b", item, re.IGNORECASE)
+        if identity and int(identity[1]) == uid and size and not literals:
+            sizes.append(int(size[1]))
+    if status != "OK" or len(sizes) != 1:
+        raise RuntimeError(f"IMAP message size fetch failed for UID {uid}")
+    if sizes[0] > maximum:
+        raise MessageTooLarge(sizes[0])
+    # A bounded partial fetch also contains a server's underestimated SIZE.
+    status, data = connection.uid("FETCH", str(uid), f"(UID BODY.PEEK[]<0.{maximum + 1}>)")
+    bodies = [literals[0] for metadata, literals in fetch_records(data)
+              if len(literals) == 1
+              and re.search(rb"\bUID\s+" + str(uid).encode() + rb"\b", metadata, re.IGNORECASE)
+              and re.search(rb"\bBODY\[\](?:<0>)?\s*\{\d+\}", metadata, re.IGNORECASE)]
+    if status != "OK" or len(bodies) != 1:
         raise RuntimeError(f"IMAP message fetch failed for UID {uid}")
-    raw = data[0][1]
-    if len(raw) > positive("SPAMC_MAX_SIZE_BYTES"):
-        raise RuntimeError("message_too_large")
+    raw = bodies[0]
+    if len(raw) > maximum:
+        raise MessageTooLarge(len(raw))
+    if len(raw) != sizes[0]:
+        raise RuntimeError("IMAP message size mismatch")
     return raw
+
+
+def handle_oversized(connection: imaplib.IMAP4, client: CapabilityIMAP, state: WorkerState,
+                     source: MailboxInfo, generation: int, uid: int, task: str,
+                     error: MessageTooLarge) -> None:
+    name = manual_review_name()
+    result = "retained_unconfigured"
+    try:
+        if name:
+            validate_manual_review()
+            if boolean("DRY_RUN"):
+                result = "would_move"
+                state.defer(task, source.name, generation, uid, error)
+            else:
+                destination = resolve_or_create(connection, client, name)
+                junk = client.resolve(required("IMAP_JUNK"), "\\junk")
+                forbidden = {source.name.casefold(), junk.name.casefold()}
+                if boolean("LEARNING_ENABLED"):
+                    forbidden.update(client.resolve(required(key)).name.casefold()
+                                     for key in ("IMAP_LEARN_HAM", "IMAP_LEARN_SPAM"))
+                if destination.name.casefold() in forbidden:
+                    raise RuntimeError("manual review folder must differ from processing folders")
+                move(connection, client, state, source, generation, uid, destination)
+                state.clear_deferred(task, source.name, generation, uid)
+                result = "moved"
+        else:
+            state.defer(task, source.name, generation, uid, error)
+    except Exception:
+        result = "move_failed"
+        state.defer(task, source.name, generation, uid, error)
+        raise
+    finally:
+        log("warn", "message_uninspected", reason="message_too_large", uid=uid,
+            folder=source.name, size_bytes=error.size, size_limit_bytes=positive("SPAMC_MAX_SIZE_BYTES"),
+            destination=name or None, action=result, dry_run=boolean("DRY_RUN"))
 
 
 def spamc(args: list[str], raw: bytes) -> subprocess.CompletedProcess[bytes]:
@@ -340,6 +519,12 @@ def move(connection: imaplib.IMAP4, client: CapabilityIMAP, state: WorkerState,
     )
 
 
+def restore_source(connection: imaplib.IMAP4, source: MailboxInfo, generation: int) -> None:
+    select(connection, source)
+    if uidvalidity(connection) != generation:
+        raise RuntimeError("source UIDVALIDITY changed during scan")
+
+
 def resolve_or_create(connection: imaplib.IMAP4, client: CapabilityIMAP, name: str) -> MailboxInfo:
     try:
         return client.resolve(name)
@@ -369,28 +554,28 @@ def process_learning(connection: imaplib.IMAP4, client: CapabilityIMAP, state: W
         if method == "imap_keyword" else
         [uid for uid in all_uids if state.learning_status(source.name, generation, uid, learn_type) == "learned"]
     )
-    for uid in resumed_uids[:limit]:
-        try:
-            if not dry_run:
-                move(connection, client, state, source, generation, uid, destination)
-                if method == "local_database":
-                    state.mark_learning(source.name, generation, uid, learn_type, "moved")
-            resumed += 1
-        except Exception as error:
-            failed += 1
-            state.failure("learning_move_failed", error)
-            log("warn", "learning_move_failed", uid=uid, learning_type=learn_type,
-                error_type=type(error).__name__)
-        processed += 1
-    remaining = limit - processed
     pending_uids = (
         search(connection, "UNKEYWORD", learned_flag)
         if method == "imap_keyword" else
         [uid for uid in all_uids if state.learning_status(source.name, generation, uid, learn_type) is None]
     )
+    task = "learning_" + learn_type
+    selected = state.batch(task, source.name, generation, resumed_uids + pending_uids, limit)
+    resumed_set = set(resumed_uids)
     state.operations.set_status(f"learning_{learn_type}_pending_count", len(pending_uids))
-    for uid in pending_uids[:remaining]:
+    for uid in selected:
+        restore_source(connection, source, generation)
+        state.advance(task, source.name, generation, uid)
+        processed += 1
         try:
+            if uid in resumed_set:
+                if not dry_run:
+                    move(connection, client, state, source, generation, uid, destination)
+                    if method == "local_database":
+                        state.mark_learning(source.name, generation, uid, learn_type, "moved")
+                resumed += 1
+                state.clear_deferred(task, source.name, generation, uid)
+                continue
             raw = fetch_message(connection, uid)
             if not dry_run:
                 learn(raw, learn_type)
@@ -403,6 +588,7 @@ def process_learning(connection: imaplib.IMAP4, client: CapabilityIMAP, state: W
                 if method == "local_database":
                     state.mark_learning(source.name, generation, uid, learn_type, "moved")
             learned += 1
+            state.clear_deferred(task, source.name, generation, uid)
             if not dry_run:
                 state.operations.increment(f"learning_{learn_type}_success_count")
                 state.operations.set_status("last_learning_success", {"type": learn_type})
@@ -410,16 +596,23 @@ def process_learning(connection: imaplib.IMAP4, client: CapabilityIMAP, state: W
             log("info", "learning_succeeded" if not dry_run else "learning_planned",
                 uid=uid, learning_type=learn_type, dry_run=dry_run)
         except Exception as error:
+            state.defer(task, source.name, generation, uid, error)
+            if isinstance(error, MessageTooLarge):
+                log("warn", "message_uninspected", reason="message_too_large", uid=uid,
+                    folder=source.name, size_bytes=error.size,
+                    size_limit_bytes=positive("SPAMC_MAX_SIZE_BYTES"),
+                    action="retained_learning_source", learning_type=learn_type)
             failed += 1
-            state.failure("learning_failed", error)
-            log("warn", "learning_failed", uid=uid, learning_type=learn_type,
+            event = "learning_move_failed" if uid in resumed_set else "learning_failed"
+            state.failure(event, error)
+            log("warn", event, uid=uid, learning_type=learn_type,
                 error_type=type(error).__name__, retry=True)
-        processed += 1
     log("info", "learning_scan_complete", learning_type=learn_type, processed=processed,
         learned=learned, resumed=resumed, failed=failed, dry_run=dry_run)
 
 
 def scan_once() -> None:
+    validate_manual_review()
     state = WorkerState()
     connection = None
     try:
@@ -457,8 +650,10 @@ def scan_once() -> None:
         else:
             state.success("processing_backlog")
         dry_run = boolean("DRY_RUN")
-        counts = {"processed": 0, "spam": 0, "ham": 0, "failed": 0}
-        for uid in candidates[:positive("BATCH_SIZE")]:
+        counts = {"processed": 0, "spam": 0, "ham": 0, "failed": 0, "oversized": 0}
+        for uid in state.batch("scan", inbox.name, generation, candidates, positive("BATCH_SIZE")):
+            restore_source(connection, inbox, generation)
+            state.advance("scan", inbox.name, generation, uid)
             try:
                 raw = fetch_message(connection, uid)
                 try:
@@ -482,12 +677,21 @@ def scan_once() -> None:
                     if method == "local_database":
                         state.mark_processed(inbox.name, generation, uid, classification)
                 counts[classification] += 1
+                state.clear_deferred("scan", inbox.name, generation, uid)
                 state.operations.increment("messages_inspected_count")
                 state.operations.increment(f"messages_{classification}_count")
                 log("info", "message_classified", uid=uid, classification=classification,
                     score=value, threshold=threshold, action="would_process" if dry_run else "processed",
                     move_required=classification == "spam", dry_run=dry_run)
+            except MessageTooLarge as error:
+                counts["oversized"] += 1
+                try:
+                    handle_oversized(connection, client, state, inbox, generation, uid, "scan", error)
+                except Exception as move_error:
+                    counts["failed"] += 1
+                    state.failure("message_move_failed", move_error)
             except Exception as error:
+                state.defer("scan", inbox.name, generation, uid, error)
                 counts["failed"] += 1
                 state.operations.increment("message_failed_count")
                 log("warn", "message_deferred", uid=uid, error_type=type(error).__name__, retry=True)
@@ -519,6 +723,7 @@ def lock_paths() -> list[Path]:
 
 
 def diagnose() -> int:
+    validate_manual_review()
     connection, client = connect()
     try:
         log("info", "startup_diagnostic", check="imap_connection", result="pass",
@@ -571,12 +776,15 @@ def diagnose() -> int:
 
 
 def setup() -> int:
+    validate_manual_review()
     connection, client = connect()
     try:
         client.resolve(required("IMAP_INBOX"))
         resolve_or_create(connection, client, required("IMAP_JUNK"))
         resolve_or_create(connection, client, required("IMAP_LEARN_HAM"))
         resolve_or_create(connection, client, required("IMAP_LEARN_SPAM"))
+        if manual_review_name():
+            resolve_or_create(connection, client, manual_review_name())
         log("info", "mailbox_setup_complete", result="pass")
         return 0
     finally:
