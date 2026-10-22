@@ -69,6 +69,29 @@ RoundcubeまたはThunderbirdなどからIMAPへ接続すれば、INBOXとJunk�
 
 ## フィードバック学習の統合テスト
 
+### サイズ超過メールの保留・退避
+
+`tests/test_oversized_mail.py`で、両処理済み方式、再起動、再試行、学習、サイズ境界とFETCH応答の違いを確認する。
+
+```sh
+python3 -m unittest discover -s tests -p test_oversized_mail.py -v
+```
+
+実IMAPでの確認は、workerが接続していない使い捨てのGreenMail専用インスタンスで実施する。次のテストは専用アカウント`test@test.local`のINBOXを初期化するため、通常利用中のGreenMailや実アカウントには使用しない。
+
+```sh
+docker run --rm -d --name mail-sentinel-oversize-test \
+  -p 127.0.0.1:33143:3143 \
+  -e 'GREENMAIL_OPTS=-Dgreenmail.setup.test.imap -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.users=test:greenmail@test.local -Dgreenmail.users.login=email' \
+  greenmail/standalone:2.1.14
+MAIL_SENTINEL_TEST_IMAP_PORT=33143 python3 -m unittest discover -s tests -p test_oversized_integration.py -v
+docker stop mail-sentinel-oversize-test
+```
+
+起動完了後にテストを実行する。検査上限をテスト用の256バイトに下げ、超過メール2件の後の通常メールが検査されること、移動先未指定の保留、設定後の安全な移動、未検査ログ、DRY_RUNでの非変更を確認する。採点はスタブに置き換え、IMAPの取得・フォルダー作成・移動には実サーバーを使う。環境変数が未指定の場合、この統合テストはスキップする。
+
+### 学習メールの移動
+
 Roundcubeでフォルダー一覧を更新すると、`Learn-Ham`と`Learn-Spam`が表示される。
 
 1. 正常メールをJunkから`Learn-Ham`へ移動する。
