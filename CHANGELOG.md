@@ -8,6 +8,12 @@
 
 今後の変更はここに記録します。
 
+## [0.1.8] - 2026-11-02
+
+### 更新
+
+- ローカル統合テスト用GreenMailを`2.1.14`から`2.1.15`へ更新（#24）。通常運用のworker・spamassassinには影響しない
+
 ## [0.1.7] - 2026-10-22
 
 ### セキュリティ
@@ -180,7 +186,8 @@ Mail Sentinel Dockerの最初のPoCリリースです。既存のメール配送
 
 詳細な導入方法は[README](README.md)と[ユーザーガイド](docs/user-guide.md)を参照してください。
 
-[Unreleased]: https://github.com/Shimahukuro/mail-sentinel-docker/compare/v0.1.7...HEAD
+[Unreleased]: https://github.com/Shimahukuro/mail-sentinel-docker/compare/v0.1.8...HEAD
+[0.1.8]: https://github.com/Shimahukuro/mail-sentinel-docker/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/Shimahukuro/mail-sentinel-docker/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/Shimahukuro/mail-sentinel-docker/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/Shimahukuro/mail-sentinel-docker/compare/v0.1.4...v0.1.5
