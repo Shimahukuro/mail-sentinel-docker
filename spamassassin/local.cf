@@ -5,6 +5,37 @@ use_bayes 1
 bayes_auto_learn 1
 bayes_path /var/lib/mail-sentinel/bayes
 
-# Do not use network-based tests in the first PoC. This keeps the initial
-# behaviour deterministic and avoids external DNS reputation queries.
+# 初期の実証では、判定結果の再現性を保つため、
+# 外部DNSを使った評判照会を行わない。
 skip_rbl_checks 1
+
+# Unicodeの文字方向を上書きするLRO（U+202D）とRLO（U+202E）を検出する。
+header MS_FROM_BIDI From =~ /\xE2\x80[\xAD\xAE]/
+describe MS_FROM_BIDI Directional override in From header
+score MS_FROM_BIDI 10.0
+
+header MS_SUBJECT_BIDI Subject =~ /\xE2\x80[\xAD\xAE]/
+describe MS_SUBJECT_BIDI Directional override in Subject
+score MS_SUBJECT_BIDI 10.0
+
+body MS_BODY_BIDI /\xE2\x80[\xAD\xAE]/
+tflags MS_BODY_BIDI nosubject
+describe MS_BODY_BIDI Directional override in message body
+score MS_BODY_BIDI 10.0
+
+# ZWSP（U+200B）、ZWNJ（U+200C）、WORD JOINER（U+2060）と、
+# ヘッダー内のFEFF（U+FEFF）を検出する。
+header MS_FROM_INVISIBLE From =~ /(?:\xE2\x80[\x8B\x8C]|\xE2\x81\xA0|\xEF\xBB\xBF)/
+describe MS_FROM_INVISIBLE Invisible character in From header
+score MS_FROM_INVISIBLE 6.0
+
+header MS_SUBJECT_INVISIBLE Subject =~ /(?:\xE2\x80[\x8B\x8C]|\xE2\x81\xA0|\xEF\xBB\xBF)/
+describe MS_SUBJECT_INVISIBLE Invisible character in Subject
+score MS_SUBJECT_INVISIBLE 6.0
+
+# MIMEパート先頭のBOMを除外できるまで、本文のFEFFの検出は保留する。
+# 絵文字の結合に使われるZWJを除外できるまで、ZWJの検出は保留する。
+body MS_BODY_INVISIBLE /(?:\xE2\x80[\x8B\x8C]|\xE2\x81\xA0)/
+tflags MS_BODY_INVISIBLE nosubject
+describe MS_BODY_INVISIBLE Invisible character in message body
+score MS_BODY_INVISIBLE 6.0
