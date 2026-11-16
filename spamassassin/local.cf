@@ -39,3 +39,8 @@ body MS_BODY_INVISIBLE /(?:\xE2\x80[\x8B\x8C]|\xE2\x81\xA0)/
 tflags MS_BODY_INVISIBLE nosubject
 describe MS_BODY_INVISIBLE Invisible character in message body
 score MS_BODY_INVISIBLE 6.0
+
+# 暫定対応
+header MS_BLOCK_LEADINGAIM_FROM From:addr =~ /\@obmnyo\.leadingaimgroup\.com$/i
+describe MS_BLOCK_LEADINGAIM_FROM Known suspicious sender domain
+score MS_BLOCK_LEADINGAIM_FROM 6.0
