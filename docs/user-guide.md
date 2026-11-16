@@ -262,6 +262,26 @@ Gmailは、ユーザー名と通常のGoogleアカウントパスワードを第
 
 アプリパスワードを利用できない場合は、組織の管理者へ認証方式を確認する。現行のMail Sentinelは、外部で事前取得したアクセストークンによるXOAUTH2認証に対応するが、アクセストークンの取得、自動更新、再認可は行わない。期限切れ前に外部の安全な仕組みでSecretを更新し、workerを再起動する必要がある。
 
+### 4.6 受信時のSPF・DMARC結果を使う
+
+既定の `AUTH_SOURCE=disabled` では、従来どおりSpamAssassinの判定を使う。この機能のために外部DNS照会を追加することはない。
+
+受信経路を確認したアカウントの `environment` にだけ、次の設定を追加できる。
+
+```json
+{
+  "AUTH_SOURCE": "authentication_results",
+  "AUTH_AUTHSERV_ID": "mx.receiver.example",
+  "AUTH_TRUST_BOUNDARY": "verified_scrubbed_ingress",
+  "AUTH_SPF_FAIL_SCORE": "0.5",
+  "AUTH_DMARC_FAIL_SCORE": "0.5"
+}
+```
+
+`AUTH_TRUST_BOUNDARY` は管理者による確認の記録である。設定する前に、対象フォルダーへ届くすべての経路で、受信境界が信頼範囲外から持ち込まれた `Authentication-Results` を除去し、自身の認証結果を付与することを確認する。この確認には、同名ヘッダーや不正な形式のヘッダーも含める。転送や内部配送、IMAP APPEND、インポートなど、境界を迂回する経路が対象フォルダーに書き込める場合も確認対象とする。経路を確認できないアカウントは無効のまま使う。証明書を検証するIMAP TLSも必須である。
+
+対象の認証ヘッダーが欠落、重複、解析不能の場合は通常判定に戻る。`Received`、`Received-SPF`、ARCのヘッダーだけで認証結果を採用することはない。信頼済みのSPF・DMARCがともに明示的な `fail` なら、スコアにかかわらずJunk移動の対象になる。片方だけが `fail` なら対応する点数を加える。配点は有限の非負数で指定できる。最初はドライランで、`startup_diagnostic` の `mail_authentication` と、`message_classified` の採用理由・最終判定を確認する。`configured` は設定が有効な形式であることを示す。
+
 ## 5. 初回起動
 
 ### 5.1 設定内容の確認

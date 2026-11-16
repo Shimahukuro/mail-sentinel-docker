@@ -1,0 +1,15 @@
+Received: from mx.provider-a.example (mx.provider-a.example [192.0.2.10])
+ by delivery.example with ESMTP; Tue, 10 Nov 2026 10:00:00 +0900
+aUtHeNtIcAtIoN-ReSuLtS: mx.provider-a.example;
+    dmarc=fail header.from=sender.example;
+    dkim=none; SPF=FAIL smtp.mailfrom=user@sender.example
+Authentication-Results: mx.provider-a.example; spf=pass; dmarc=pass
+Received: from spoofed.example by mx.provider-a.example;
+ Tue, 10 Nov 2026 09:59:00 +0900
+Received-SPF: fail (synthetic result)
+ARC-Authentication-Results: i=1; mx.provider-a.example; spf=fail; dmarc=fail
+From: テスト送信者 <user@sender.example>
+To: receiver@example.invalid
+Subject: Synthetic authentication header test
+
+Synthetic message.

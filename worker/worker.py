@@ -19,6 +19,7 @@ from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from mail_sentinel_authentication import AuthenticationSettings
 from mail_sentinel_imap import CapabilityIMAP, MailboxInfo, connect_imap
 from mail_sentinel_move import SafeMover
 from mail_sentinel_operations import Notifier, OperationsState
@@ -613,6 +614,7 @@ def process_learning(connection: imaplib.IMAP4, client: CapabilityIMAP, state: W
 
 def scan_once() -> None:
     validate_manual_review()
+    auth = AuthenticationSettings.from_environment(os.environ)
     state = WorkerState()
     connection = None
     try:
@@ -663,7 +665,17 @@ def scan_once() -> None:
                 except Exception as error:
                     state.failure("spamassassin_failed", error)
                     raise
-                classification = "spam" if value >= threshold else "ham"
+                evidence = auth.read(raw)
+                quarantine, adjustment, auth_reason = auth.policy.evaluate(evidence)
+                spamassassin_spam = value >= threshold
+                classification = "spam" if quarantine or value + adjustment >= threshold else "ham"
+                reason = "BELOW_THRESHOLD"
+                if quarantine:
+                    reason = auth_reason
+                elif spamassassin_spam:
+                    reason = "SPAMASSASSIN"
+                elif classification == "spam":
+                    reason = auth_reason
                 if not dry_run:
                     if classification == "spam":
                         try:
@@ -682,6 +694,11 @@ def scan_once() -> None:
                 state.operations.increment(f"messages_{classification}_count")
                 log("info", "message_classified", uid=uid, classification=classification,
                     score=value, threshold=threshold, action="would_process" if dry_run else "processed",
+                    spamassassin_classification="spam" if spamassassin_spam else "ham",
+                    spf_result=evidence.spf, dmarc_result=evidence.dmarc, dkim_result=evidence.dkim,
+                    authentication_source=evidence.source, authentication_trusted=evidence.trusted,
+                    authentication_reason=evidence.reason, authentication_score_adjustment=adjustment,
+                    authentication_policy=auth_reason, classification_reason=reason,
                     move_required=classification == "spam", dry_run=dry_run)
             except MessageTooLarge as error:
                 counts["oversized"] += 1
@@ -724,6 +741,9 @@ def lock_paths() -> list[Path]:
 
 def diagnose() -> int:
     validate_manual_review()
+    auth = AuthenticationSettings.from_environment(os.environ)
+    log("info", "startup_diagnostic", check="mail_authentication",
+        result="configured" if auth.source is not None else "inactive", reason=auth.reason)
     connection, client = connect()
     try:
         log("info", "startup_diagnostic", check="imap_connection", result="pass",
